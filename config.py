@@ -108,11 +108,11 @@ def _prompt_full_config(defaults: Dict[str, str]) -> Tuple[Dict[str, str], bool]
     root.attributes("-topmost", True)
 
     field_labels = {
-        "FEISHU_APP_ID": "Feishu App ID",
-        "FEISHU_APP_SECRET": "Feishu App Secret",
-        "FEISHU_PROFILE_TABLE_URL": "Client Table URL",
-        "FEISHU_TABLE_URL": "Task Table URL",
-        "WECHAT_EXEC_PATH": "WeChat 路径 (可选)",
+        "FEISHU_APP_ID": "飞书 App ID",
+        "FEISHU_APP_SECRET": "飞书 App Secret",
+        "FEISHU_PROFILE_TABLE_URL": "客户表链接 (资料表)",
+        "FEISHU_TABLE_URL": "预约表链接 (任务表)",
+        "WECHAT_EXEC_PATH": "PC微信启动路径",
     }
 
     field_vars: Dict[str, StringVar] = {

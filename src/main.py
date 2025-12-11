@@ -1,12 +1,17 @@
 """
 业务主入口：轮询飞书任务，调用微信 RPA 添加好友，并回写处理状态。
+启动时始终显示 Tk 窗口，并在后台线程跑任务。
 """
 
 from __future__ import annotations
 
+import queue
 import sys
+import threading
 import time
 from pathlib import Path
+from tkinter import Tk, ttk
+from tkinter.scrolledtext import ScrolledText
 
 import requests
 from loguru import logger
@@ -17,14 +22,28 @@ from src.wechat_bot import WeChatRPA
 
 LOG_DIR = Path(__file__).resolve().parent.parent / "logs"
 LOG_DIR.mkdir(parents=True, exist_ok=True)
+LOG_QUEUE: "queue.Queue[str]" = queue.Queue(maxsize=500)
 
-# 配置日志输出，保留文件并输出到控制台
+# ============== 日志配置 ==============
 logger.remove()
 logger.add(LOG_DIR / "run.log", rotation="20 MB", retention="7 days", encoding="utf-8")
-logger.add(sys.stdout, colorize=False, format="{time:YYYY-MM-DD HH:mm:ss} | {level} | {message}")
+if sys.stderr is not None:
+    logger.add(sys.stderr, colorize=False, format="{time:YYYY-MM-DD HH:mm:ss} | {level} | {message}")
 
 
-def main() -> None:
+def _queue_sink(message) -> None:  # type: ignore[override]
+    """将日志推送到 GUI 队列用于实时展示。"""
+    try:
+        LOG_QUEUE.put_nowait(str(message).rstrip("\n"))
+    except Exception:
+        pass
+
+
+# 将 GUI sink 放在最后，避免阻塞主日志输出
+logger.add(_queue_sink, format="{time:YYYY-MM-DD HH:mm:ss} | {level} | {message}")
+
+
+def run_bot(stop_event: threading.Event) -> None:
     """
     业务循环：
     1. 从飞书任务表获取待处理手机号
@@ -34,48 +53,43 @@ def main() -> None:
     """
     feishu = FeishuClient()
     wechat = WeChatRPA(exec_path=WECHAT_EXEC_PATH)
-    
-    # 本地缓存，防止单次循环内重复处理同一个ID（可选）
     processed_cache = set()
 
     logger.info("系统启动，开始轮询飞书任务...")
 
-    while True:
+    while not stop_event.is_set():
         try:
             tasks = feishu.fetch_new_tasks()
             if not tasks:
-                # 没任务时稍微降低频率，避免刷屏
                 time.sleep(5)
                 continue
 
             for item in tasks:
+                if stop_event.is_set():
+                    break
+
                 record_id = item.get("record_id") or item.get("recordId")
-                
-                # 简单去重保护
+
                 if record_id in processed_cache:
                     continue
 
                 fields = item.get("fields", {})
-                raw_phone = fields.get("手机号")  # 客户表手机号字段
+                raw_phone = fields.get("手机号")
                 status = fields.get("微信绑定状态", "")
 
-                # ================= 核心修复部分开始 =================
                 phone: str = ""
                 if isinstance(raw_phone, str):
                     phone = raw_phone.strip()
                 elif isinstance(raw_phone, (int, float)):
-                    phone = str(int(raw_phone)) # 去掉小数点
+                    phone = str(int(raw_phone))
                 elif isinstance(raw_phone, list) and raw_phone:
                     first_item = raw_phone[0]
-                    # 判断列表里是否为字典（飞书标准格式）
                     if isinstance(first_item, dict):
-                        # 依次尝试获取：电话字段(full_number)、文本字段(text)、公式字段(value)
                         phone = first_item.get("full_number") or first_item.get("text") or first_item.get("value") or ""
                     else:
                         phone = str(first_item)
-                
-                phone = phone.strip() # 再次去空格
-                # ================= 核心修复部分结束 =================
+
+                phone = phone.strip()
 
                 if not phone:
                     logger.warning("任务缺少手机号字段或格式异常，跳过: {}", item)
@@ -84,7 +98,6 @@ def main() -> None:
                         processed_cache.add(record_id)
                     continue
 
-                # 解析姓名 (兼容富文本结构)
                 name_value = fields.get("姓名", "")
                 name = ""
                 if isinstance(name_value, list) and name_value:
@@ -95,12 +108,9 @@ def main() -> None:
                         name = str(first)
                 elif isinstance(name_value, str):
                     name = name_value
-                
+
                 logger.info("处理任务 -> 手机:[{}] 姓名:[{}] 当前状态:[{}]", phone, name, status)
 
-                # --- 业务逻辑判断 ---
-                
-                # 1. 已经是好友/已添加 -> 跳过
                 if status == "已添加":
                     logger.info("状态已是[已添加]，跳过: {}", phone)
                     if record_id:
@@ -108,7 +118,6 @@ def main() -> None:
                         processed_cache.add(record_id)
                     continue
 
-                # 2. 已经绑定系统 -> 跳过
                 if status == "已绑定":
                     logger.info("状态已是[已绑定]，无需添加: {}", phone)
                     if record_id:
@@ -116,17 +125,13 @@ def main() -> None:
                         processed_cache.add(record_id)
                     continue
 
-                # 3. 执行添加好友
                 verify_msg = f"您好 {name}，这里是 Store 数字运营系统，请通过好友以便后续沟通。"
                 result = wechat.add_friend(phone, verify_msg=verify_msg)
                 logger.info("RPA执行结果 [{}]: {}", phone, result)
 
-                # 4. 根据结果回写状态
-                # 如果是 "added"(已申请) 或 "exists"(已经是好友)，都算处理成功
                 if record_id:
                     try:
                         if result in ("added", "exists"):
-                            # mark_processed 会把微信绑定状态写为“已添加”
                             feishu.mark_processed(record_id)
                             processed_cache.add(record_id)
                         elif result == "failed":
@@ -138,14 +143,76 @@ def main() -> None:
                     except Exception as mark_err:  # noqa: BLE001
                         logger.error("回写飞书失败 (未知): {}", mark_err)
 
-            time.sleep(2) # 每一个批次处理完休息一下
-            
-        except KeyboardInterrupt:
-            logger.info("程序被手动终止")
-            break
+            time.sleep(2)
+
         except Exception as exc:  # noqa: BLE001
+            if stop_event.is_set():
+                break
             logger.exception("主循环发生未知异常: {}", exc)
             time.sleep(5)
 
+    logger.info("停止信号已收到，退出任务轮询。")
+
+
+def _start_gui() -> None:
+    """启动 Tk 窗口与后台线程。"""
+    stop_event = threading.Event()
+    root = Tk()
+    root.title("Store 小助手 - 运行中")
+    root.geometry("760x520")
+    root.resizable(False, False)
+
+    main_frame = ttk.Frame(root, padding=12)
+    main_frame.pack(fill="both", expand=True)
+
+    status_label = ttk.Label(main_frame, text="正在监控飞书任务...", font=("Segoe UI", 12, "bold"))
+    status_label.pack(anchor="w", pady=(0, 8))
+
+    log_box = ScrolledText(main_frame, height=24, width=90, state="disabled", wrap="word")
+    log_box.pack(fill="both", expand=True, pady=(0, 8))
+
+    btn_frame = ttk.Frame(main_frame)
+    btn_frame.pack(fill="x")
+    stop_btn = ttk.Button(btn_frame, text="停止程序", width=20)
+    stop_btn.pack(side="right")
+
+    def poll_log_queue() -> None:
+        try:
+            while True:
+                line = LOG_QUEUE.get_nowait()
+                log_box.configure(state="normal")
+                log_box.insert("end", line + "\n")
+                log_box.see("end")
+                log_box.configure(state="disabled")
+        except queue.Empty:
+            pass
+        root.after(500, poll_log_queue)
+
+    def stop_runner() -> None:
+        stop_btn.config(state="disabled", text="正在停止...")
+        status_label.config(text="正在停止，请稍候...")
+        stop_event.set()
+        _wait_thread()
+
+    def _wait_thread() -> None:
+        if worker.is_alive():
+            root.after(400, _wait_thread)
+        else:
+            status_label.config(text="已停止，窗口即将关闭。")
+            root.after(600, root.destroy)
+
+    def on_close() -> None:
+        stop_runner()
+
+    stop_btn.config(command=stop_runner)
+    root.protocol("WM_DELETE_WINDOW", on_close)
+
+    worker = threading.Thread(target=run_bot, args=(stop_event,), daemon=True)
+    worker.start()
+
+    poll_log_queue()
+    root.mainloop()
+
+
 if __name__ == "__main__":
-    main()
+    _start_gui()
