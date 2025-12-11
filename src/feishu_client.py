@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import time
 from typing import Any, Dict, List, Tuple
+from urllib.parse import parse_qs, urlparse
 
 import requests
 from loguru import logger
@@ -32,12 +33,15 @@ class FeishuClient:
         task_table_url: str = FEISHU_TABLE_URL,
         profile_table_url: str = FEISHU_PROFILE_TABLE_URL,
     ) -> None:
-        self.app_id = app_id
-        self.app_secret = app_secret
-        self.task_table_url = task_table_url.rstrip("/")
-        self.profile_table_url = profile_table_url.rstrip("/")
+        # 先初始化 token 相关字段，避免后续 normalize 过程中调用 get_token 时未定义
         self._tenant_access_token: str | None = None
         self._token_expire_at: float = 0.0
+
+        self.app_id = app_id
+        self.app_secret = app_secret
+        self._wiki_token_cache: Dict[str, str] = {}
+        self.task_table_url = self._normalize_table_url(task_table_url)
+        self.profile_table_url = self._normalize_table_url(profile_table_url)
 
     # ========================= 基础请求 =========================
     def get_token(self) -> str:
@@ -92,14 +96,43 @@ class FeishuClient:
         return data
 
     # ========================= 辅助工具 =========================
-    def _parse_table_info(self, table_url: str) -> Tuple[str, str]:
+    def _normalize_table_url(self, table_url: str) -> str:
         """
-        从记录接口 URL 中提取 app_token 与 table_id。
-        期望格式: .../apps/{app_token}/tables/{table_id}/records
+        支持正常 Bitable API URL 也支持 Wiki 链接。
+        - 如果链接来自 Wiki (/wiki/<token>?table=tblxxx)，先换算为 Base obj_token
+        - 最终输出格式: https://open.feishu.cn/open-apis/bitable/v1/apps/{app_token}/tables/{table_id}/records
         """
-        from urllib.parse import urlparse
+        parsed = urlparse(table_url)
+        parts = [p for p in parsed.path.split("/") if p]
 
-        parts = [p for p in urlparse(table_url).path.split("/") if p]
+        # Wiki 链接：需要先通过 API 换索引 token
+        if "wiki" in parts:
+            wiki_index = parts.index("wiki")
+            if wiki_index + 1 >= len(parts):
+                raise ValueError("Wiki 链接缺少 token")
+            wiki_token = parts[wiki_index + 1]
+            table_id = self._extract_table_id(parsed)
+            base_token = self._resolve_wiki_token(wiki_token)
+            url = f"https://open.feishu.cn/open-apis/bitable/v1/apps/{base_token}/tables/{table_id}/records"
+            logger.debug("Wiki 链接已换算为表格: wiki_token={} -> base_token={}", wiki_token, base_token)
+            return url.rstrip("/")
+
+        # 正常 API 路径：直接解析 app_token 和 table_id 再重构
+        if "apps" in parts and "tables" in parts:
+            app_token, table_id = self._parse_table_info_from_api_path(parts)
+            url = f"https://open.feishu.cn/open-apis/bitable/v1/apps/{app_token}/tables/{table_id}/records"
+            return url.rstrip("/")
+
+        raise ValueError("不支持的表格链接格式，请使用 Bitable 或 Wiki 链接")
+
+    def _extract_table_id(self, parsed_url) -> str:
+        query = {k.lower(): v for k, v in parse_qs(parsed_url.query).items()}
+        for key in ("table", "table_id", "tableid"):
+            if key in query and query[key]:
+                return query[key][0]
+        raise ValueError("没有从 URL 参数中找到 table_id，请检查链接的 table= 参数")
+
+    def _parse_table_info_from_api_path(self, parts: List[str]) -> Tuple[str, str]:
         if "apps" not in parts or "tables" not in parts:
             raise ValueError("表格 URL 格式异常，缺少 apps/tables 段")
         app_token = parts[parts.index("apps") + 1]
@@ -107,6 +140,32 @@ class FeishuClient:
         if not app_token or not table_id:
             raise ValueError("无法从表格 URL 解析 app_token 或 table_id")
         return app_token, table_id
+
+    def _parse_table_info(self, table_url: str) -> Tuple[str, str]:
+        """
+        从表格链接提取 app_token 和 table_id，无论是 API 链接还是 Wiki 链接。
+        """
+        normalized = self._normalize_table_url(table_url)
+        parts = [p for p in urlparse(normalized).path.split("/") if p]
+        return self._parse_table_info_from_api_path(parts)
+
+    def _resolve_wiki_token(self, wiki_token: str) -> str:
+        """
+        通过 Wiki token 获取其对应的 Bitable obj_token（Base token）。
+        结果会缓存，防止重复请求。
+        """
+        if wiki_token in self._wiki_token_cache:
+            return self._wiki_token_cache[wiki_token]
+
+        url = "https://open.feishu.cn/open-apis/wiki/v2/spaces/get_node"
+        params = {"obj_type": "wiki", "token": wiki_token}
+        data = self._request("GET", url, params=params)
+        obj_token = data.get("data", {}).get("node", {}).get("obj_token")
+        if not obj_token:
+            raise RuntimeError(f"无法将 Wiki token 换算为 Base token：{data}")
+
+        self._wiki_token_cache[wiki_token] = obj_token
+        return obj_token
 
     def list_fields(self, table_url: str) -> List[Dict[str, Any]]:
         """
@@ -119,7 +178,8 @@ class FeishuClient:
 
     def list_records(self, table_url: str, page_size: int = 5) -> List[Dict[str, Any]]:
         params = {"page_size": page_size}
-        data = self._request("GET", table_url, params=params)
+        normalized = self._normalize_table_url(table_url)
+        data = self._request("GET", normalized, params=params)
         return data.get("data", {}).get("items", [])
 
     # ========================= 业务方法 =========================

@@ -10,16 +10,22 @@
 
 ## 目录结构
 ```
-store_system/
-  .env.example        # 环境变量模板，复制为 .env 并填充
-  .gitignore          # 已忽略 .env、logs/、__pycache__/
-  requirements.txt    # 依赖列表
-  config.py           # 环境变量加载与配置
-  src/
-    feishu_client.py  # 飞书 API 封装
-    wechat_bot.py     # 微信 RPA 封装
-    main.py           # 主业务循环入口
-    inspect_tables.py # 辅助脚本，查看飞书表字段与样例
+.
+|-- .env.example        # 环境变量模板，复制为 .env 并填充
+|-- .gitignore          # 忽略 .env、__pycache__ 等
+|-- README.md
+|-- requirements.txt    # 依赖列表
+|-- config.ini          # 配置文件（表/日志路径等），运行时会读取
+|-- config.py           # 环境变量与 config.ini 读取封装
+|-- launcher.py         # Windows 启动入口，封装拉起/重试
+|-- @AutomationLog.txt  # 自动化工具运行日志（示例，可忽略）
+`-- src
+    |-- __init__.py
+    |-- debug_feishu.py   # 调试飞书 API 的便捷脚本
+    |-- feishu_client.py  # 飞书 API 封装
+    |-- inspect_tables.py # 辅助脚本，查看飞书表字段与样例
+    |-- main.py           # 主业务循环入口
+    `-- wechat_bot.py     # 微信 RPA 封装
 ```
 
 ## 环境要求

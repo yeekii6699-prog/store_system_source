@@ -2,10 +2,11 @@ import configparser
 import os
 import sys
 from pathlib import Path
-from typing import Tuple
+from typing import Dict, Tuple
 
 from dotenv import load_dotenv
-from tkinter import Tk, simpledialog
+from tkinter import BooleanVar, StringVar, Tk, filedialog, messagebox
+from tkinter import ttk
 
 # ============== 路径与配置文件定位 ==============
 if getattr(sys, "frozen", False):
@@ -36,19 +37,138 @@ def _save_config() -> None:
         _config.write(f)
 
 
-def _prompt_credentials() -> Tuple[str, str]:
+def auto_detect_wechat_path() -> str:
     """
-    通过 Tk 简单弹窗收集飞书凭据。
-    会创建一个隐藏的 root 窗口，再使用 simpledialog 询问。
+    尝试通过注册表或常见安装目录自动发现 WeChat.exe。
+    未找到则返回空字符串。
     """
+    candidates: list[Path] = []
+    try:
+        import winreg  # type: ignore
+
+        reg_locations = [
+            (winreg.HKEY_CURRENT_USER, r"SOFTWARE\Tencent\WeChat"),
+            (winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\WOW6432Node\Tencent\WeChat"),
+            (winreg.HKEY_LOCAL_MACHINE, r"SOFTWARE\Tencent\WeChat"),
+        ]
+        for hive, sub_key in reg_locations:
+            try:
+                with winreg.OpenKey(hive, sub_key) as key:
+                    install_path, _ = winreg.QueryValueEx(key, "InstallPath")
+                    if install_path:
+                        candidates.append(Path(install_path) / "WeChat.exe")
+            except FileNotFoundError:
+                continue
+    except Exception:
+        # 非 Windows 或无法读取注册表时忽略
+        pass
+
+    program_files = Path(os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)"))
+    candidates.append(program_files / "Tencent" / "WeChat" / "WeChat.exe")
+    program_files64 = Path(os.environ.get("ProgramFiles", r"C:\Program Files"))
+    candidates.append(program_files64 / "Tencent" / "WeChat" / "WeChat.exe")
+
+    for cand in candidates:
+        if cand.exists():
+            return str(cand)
+    return ""
+
+
+def _collect_defaults() -> Dict[str, str]:
+    """
+    汇总环境变量或 config.ini 中已有的值，用于界面预填。
+    优先级：环境变量 > config.ini > 空。
+    """
+    default_section = _config["DEFAULT"]
+    detected_wechat = auto_detect_wechat_path()
+    return {
+        "FEISHU_APP_ID": (os.getenv("FEISHU_APP_ID") or default_section.get("FEISHU_APP_ID", "")).strip(),
+        "FEISHU_APP_SECRET": (os.getenv("FEISHU_APP_SECRET") or default_section.get("FEISHU_APP_SECRET", "")).strip(),
+        "FEISHU_TABLE_URL": (os.getenv("FEISHU_TABLE_URL") or default_section.get("FEISHU_TABLE_URL", "")).strip(),
+        "FEISHU_PROFILE_TABLE_URL": (os.getenv("FEISHU_PROFILE_TABLE_URL") or default_section.get("FEISHU_PROFILE_TABLE_URL", "")).strip(),
+        "WECHAT_EXEC_PATH": (
+            os.getenv("WECHAT_EXEC_PATH")
+            or default_section.get("WECHAT_EXEC_PATH", "")
+            or detected_wechat
+            or ""
+        ).strip(),
+    }
+
+
+def _prompt_full_config(defaults: Dict[str, str]) -> Tuple[Dict[str, str], bool]:
+    """
+    Tkinter 配置窗口：支持粘贴完整的飞书链接，并可选择是否保存到 config.ini。
+    返回：用户输入的配置字典，以及是否记住配置的布尔值。
+    """
+    result: Dict[str, str] | None = None
     root = Tk()
-    root.withdraw()
-    app_id = simpledialog.askstring("飞书配置", "请输入 FEISHU_APP_ID", parent=root) or ""
-    app_secret = simpledialog.askstring(
-        "飞书配置", "请输入 FEISHU_APP_SECRET", parent=root, show="*"
-    ) or ""
-    root.destroy()
-    return app_id.strip(), app_secret.strip()
+    root.title("飞书/微信 配置")
+    root.geometry("620x320")
+    root.resizable(False, False)
+    root.attributes("-topmost", True)
+
+    field_labels = {
+        "FEISHU_APP_ID": "Feishu App ID",
+        "FEISHU_APP_SECRET": "Feishu App Secret",
+        "FEISHU_PROFILE_TABLE_URL": "Client Table URL",
+        "FEISHU_TABLE_URL": "Task Table URL",
+        "WECHAT_EXEC_PATH": "WeChat 路径 (可选)",
+    }
+
+    field_vars: Dict[str, StringVar] = {
+        key: StringVar(value=defaults.get(key, "")) for key in field_labels
+    }
+    remember_var = BooleanVar(value=CONFIG_PATH.exists())
+
+    frame = ttk.Frame(root, padding=12)
+    frame.pack(fill="both", expand=True)
+
+    for idx, (key, label) in enumerate(field_labels.items()):
+        ttk.Label(frame, text=label, anchor="w").grid(row=idx, column=0, sticky="w", pady=4)
+        entry = ttk.Entry(frame, textvariable=field_vars[key], width=62, show="*" if key == "FEISHU_APP_SECRET" else "")
+        entry.grid(row=idx, column=1, sticky="ew", pady=4)
+        if key == "WECHAT_EXEC_PATH":
+            def _browse_file(event=None):  # noqa: ANN001
+                path = filedialog.askopenfilename(
+                    title="选择 WeChat.exe",
+                    filetypes=[("WeChat", "WeChat.exe"), ("可执行文件", "*.exe")],
+                )
+                if path:
+                    field_vars["WECHAT_EXEC_PATH"].set(path)
+            ttk.Button(frame, text="浏览...", command=_browse_file).grid(row=idx, column=2, padx=(6, 0), pady=4)
+        if idx == 0:
+            entry.focus_set()
+
+    ttk.Checkbutton(frame, text="记住配置（写入 config.ini）", variable=remember_var).grid(
+        row=len(field_labels), column=0, columnspan=2, sticky="w", pady=8
+    )
+
+    required_keys = {"FEISHU_APP_ID", "FEISHU_APP_SECRET", "FEISHU_PROFILE_TABLE_URL", "FEISHU_TABLE_URL"}
+
+    def _submit(event=None) -> None:  # noqa: ANN001
+        nonlocal result
+        values = {k: v.get().strip() for k, v in field_vars.items()}
+        missing = [label for key, label in field_labels.items() if key in required_keys and not values.get(key)]
+        if missing:
+            messagebox.showerror("缺少配置", f"请填写: {', '.join(missing)}")
+            return
+        result = values
+        root.destroy()
+
+    def _on_close() -> None:
+        root.destroy()
+
+    btn = ttk.Button(frame, text="保存并启动", command=_submit)
+    btn.grid(row=len(field_labels) + 1, column=0, columnspan=3, pady=8)
+
+    root.bind("<Return>", _submit)
+    root.protocol("WM_DELETE_WINDOW", _on_close)
+    frame.columnconfigure(1, weight=1)
+
+    root.mainloop()
+    if result is None:
+        raise RuntimeError("未完成配置输入，程序已退出")
+    return result, bool(remember_var.get())
 
 
 def _get_config_value(key: str, default: str | None = None, required: bool = False) -> str:
@@ -66,27 +186,37 @@ def _get_config_value(key: str, default: str | None = None, required: bool = Fal
     return value
 
 
-def _ensure_credentials() -> Tuple[str, str]:
+def _ensure_full_config() -> Dict[str, str]:
     """
-    保证 FEISHU_APP_ID / FEISHU_APP_SECRET 有值；
-    若缺失则弹窗提示用户输入，并写入 config.ini。
+    弹出界面收集配置，支持“记住配置”写入 config.ini。
+    若设置环境变量 SKIP_CONFIG_UI=1 且必填项已存在，则跳过界面直接返回。
     """
-    app_id = os.getenv("FEISHU_APP_ID") or _config["DEFAULT"].get("FEISHU_APP_ID", "").strip()
-    app_secret = os.getenv("FEISHU_APP_SECRET") or _config["DEFAULT"].get("FEISHU_APP_SECRET", "").strip()
+    cfg = _collect_defaults()
+    required_keys = [
+        "FEISHU_APP_ID",
+        "FEISHU_APP_SECRET",
+        "FEISHU_TABLE_URL",
+        "FEISHU_PROFILE_TABLE_URL",
+    ]
+    skip_ui = os.getenv("SKIP_CONFIG_UI") == "1"
+    if not skip_ui or any(not cfg.get(k) for k in required_keys):
+        filled, remember = _prompt_full_config(cfg)
+        cfg.update(filled)
+        if remember:
+            for key, value in cfg.items():
+                _config["DEFAULT"][key] = value
+            _save_config()
+        else:
+            _config["DEFAULT"].clear()
+            CONFIG_PATH.unlink(missing_ok=True)
+    return cfg
 
-    if not app_id or not app_secret:
-        app_id, app_secret = _prompt_credentials()
-        if not app_id or not app_secret:
-            raise RuntimeError("缺少飞书凭据，请重新运行并输入 FEISHU_APP_ID/FEISHU_APP_SECRET")
-        _config["DEFAULT"]["FEISHU_APP_ID"] = app_id
-        _config["DEFAULT"]["FEISHU_APP_SECRET"] = app_secret
-        _save_config()
 
-    return app_id, app_secret
-
+_cfg = _ensure_full_config()
 
 # ============== 对外暴露的配置变量 ==============
-FEISHU_APP_ID, FEISHU_APP_SECRET = _ensure_credentials()
-FEISHU_TABLE_URL = _get_config_value("FEISHU_TABLE_URL", required=True)
-FEISHU_PROFILE_TABLE_URL = _get_config_value("FEISHU_PROFILE_TABLE_URL", required=True)
-WECHAT_EXEC_PATH = _get_config_value("WECHAT_EXEC_PATH", required=True)
+FEISHU_APP_ID = _cfg["FEISHU_APP_ID"]
+FEISHU_APP_SECRET = _cfg["FEISHU_APP_SECRET"]
+FEISHU_TABLE_URL = _cfg["FEISHU_TABLE_URL"]
+FEISHU_PROFILE_TABLE_URL = _cfg["FEISHU_PROFILE_TABLE_URL"]
+WECHAT_EXEC_PATH = _cfg.get("WECHAT_EXEC_PATH", "") or auto_detect_wechat_path() or _get_config_value("WECHAT_EXEC_PATH", default="")
