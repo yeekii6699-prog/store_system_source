@@ -212,11 +212,14 @@ def _ensure_full_config() -> Dict[str, str]:
     return cfg
 
 
-_cfg = _ensure_full_config()
+_cfg_cache: Dict[str, str] | None = None
 
-# ============== 对外暴露的配置变量 ==============
-FEISHU_APP_ID = _cfg["FEISHU_APP_ID"]
-FEISHU_APP_SECRET = _cfg["FEISHU_APP_SECRET"]
-FEISHU_TABLE_URL = _cfg["FEISHU_TABLE_URL"]
-FEISHU_PROFILE_TABLE_URL = _cfg["FEISHU_PROFILE_TABLE_URL"]
-WECHAT_EXEC_PATH = _cfg.get("WECHAT_EXEC_PATH", "") or auto_detect_wechat_path() or _get_config_value("WECHAT_EXEC_PATH", default="")
+
+def get_config() -> Dict[str, str]:
+    """
+    懒加载配置，首次调用时才弹出界面或读取文件。
+    """
+    global _cfg_cache  # noqa: PLW0603
+    if _cfg_cache is None:
+        _cfg_cache = _ensure_full_config()
+    return _cfg_cache

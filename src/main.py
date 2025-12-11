@@ -5,18 +5,19 @@
 
 from __future__ import annotations
 
+import os
 import queue
 import sys
 import threading
 import time
 from pathlib import Path
-from tkinter import Tk, ttk
+from tkinter import Tk, messagebox, ttk
 from tkinter.scrolledtext import ScrolledText
 
 import requests
 from loguru import logger
 
-from config import WECHAT_EXEC_PATH
+from config import get_config
 from src.feishu_client import FeishuClient
 from src.wechat_bot import WeChatRPA
 
@@ -43,7 +44,7 @@ def _queue_sink(message) -> None:  # type: ignore[override]
 logger.add(_queue_sink, format="{time:YYYY-MM-DD HH:mm:ss} | {level} | {message}")
 
 
-def run_bot(stop_event: threading.Event) -> None:
+def run_bot(stop_event: threading.Event, cfg: dict[str, str]) -> None:
     """
     业务循环：
     1. 从飞书任务表获取待处理手机号
@@ -51,8 +52,13 @@ def run_bot(stop_event: threading.Event) -> None:
     3. 已绑定客户跳过，新客户触发微信加好友
     4. 回写飞书处理状态
     """
-    feishu = FeishuClient()
-    wechat = WeChatRPA(exec_path=WECHAT_EXEC_PATH)
+    feishu = FeishuClient(
+        app_id=cfg.get("FEISHU_APP_ID"),
+        app_secret=cfg.get("FEISHU_APP_SECRET"),
+        task_table_url=cfg.get("FEISHU_TABLE_URL"),
+        profile_table_url=cfg.get("FEISHU_PROFILE_TABLE_URL"),
+    )
+    wechat = WeChatRPA(exec_path=cfg.get("WECHAT_EXEC_PATH", ""))
     processed_cache = set()
 
     logger.info("系统启动，开始轮询飞书任务...")
@@ -156,6 +162,18 @@ def run_bot(stop_event: threading.Event) -> None:
 
 def _start_gui() -> None:
     """启动 Tk 窗口与后台线程。"""
+    try:
+        cfg = get_config()
+    except Exception as exc:  # noqa: BLE001
+        logger.error("配置加载失败：{}", exc)
+        try:
+            root = Tk()
+            root.withdraw()
+            messagebox.showerror("配置未完成", f"请填写配置后重试：{exc}", parent=root)
+            root.destroy()
+        except Exception:
+            pass
+        return
     stop_event = threading.Event()
     root = Tk()
     root.title("Store 小助手 - 运行中")
@@ -192,14 +210,12 @@ def _start_gui() -> None:
         stop_btn.config(state="disabled", text="正在停止...")
         status_label.config(text="正在停止，请稍候...")
         stop_event.set()
-        _wait_thread()
-
-    def _wait_thread() -> None:
-        if worker.is_alive():
-            root.after(400, _wait_thread)
-        else:
-            status_label.config(text="已停止，窗口即将关闭。")
-            root.after(600, root.destroy)
+        # 守护线程 + 强制退出，避免第三方库挂起进程
+        try:
+            root.destroy()
+        except Exception:
+            pass
+        os._exit(0)
 
     def on_close() -> None:
         stop_runner()
@@ -207,7 +223,7 @@ def _start_gui() -> None:
     stop_btn.config(command=stop_runner)
     root.protocol("WM_DELETE_WINDOW", on_close)
 
-    worker = threading.Thread(target=run_bot, args=(stop_event,), daemon=True)
+    worker = threading.Thread(target=run_bot, args=(stop_event, cfg), daemon=True)
     worker.start()
 
     poll_log_queue()

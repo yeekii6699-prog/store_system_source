@@ -11,12 +11,7 @@ from urllib.parse import parse_qs, urlparse
 import requests
 from loguru import logger
 
-from config import (
-    FEISHU_APP_ID,
-    FEISHU_APP_SECRET,
-    FEISHU_PROFILE_TABLE_URL,
-    FEISHU_TABLE_URL,
-)
+from config import get_config
 
 
 class FeishuClient:
@@ -28,20 +23,23 @@ class FeishuClient:
 
     def __init__(
         self,
-        app_id: str = FEISHU_APP_ID,
-        app_secret: str = FEISHU_APP_SECRET,
-        task_table_url: str = FEISHU_TABLE_URL,
-        profile_table_url: str = FEISHU_PROFILE_TABLE_URL,
+        app_id: str | None = None,
+        app_secret: str | None = None,
+        task_table_url: str | None = None,
+        profile_table_url: str | None = None,
     ) -> None:
         # 先初始化 token 相关字段，避免后续 normalize 过程中调用 get_token 时未定义
         self._tenant_access_token: str | None = None
         self._token_expire_at: float = 0.0
 
-        self.app_id = app_id
-        self.app_secret = app_secret
+        cfg = get_config()
+        self.app_id = app_id or cfg["FEISHU_APP_ID"]
+        self.app_secret = app_secret or cfg["FEISHU_APP_SECRET"]
         self._wiki_token_cache: Dict[str, str] = {}
-        self.task_table_url = self._normalize_table_url(task_table_url)
-        self.profile_table_url = self._normalize_table_url(profile_table_url)
+        task_url = task_table_url or cfg["FEISHU_TABLE_URL"]
+        profile_url = profile_table_url or cfg["FEISHU_PROFILE_TABLE_URL"]
+        self.task_table_url = self._normalize_table_url(task_url)
+        self.profile_table_url = self._normalize_table_url(profile_url)
 
     # ========================= 基础请求 =========================
     def get_token(self) -> str:

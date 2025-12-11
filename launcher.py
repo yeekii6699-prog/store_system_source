@@ -18,7 +18,7 @@ import requests
 # ============== 需要按实际部署修改的常量 ==============
 CURRENT_VERSION = "0.0.1"
 VERSION_URL = "https://gitee.com/yeekii77/store_system/raw/master/version.txt"      # 远程版本号文本文件
-ZIP_URL = "https://gitee.com/yeekii77/store_system/releases/download/1.1.0/main_bot.zip"  # 新版压缩包下载地址
+ZIP_URL = "https://gitee.com/yeekii77/store_system/releases/download/1.1.0/main_bot.zip"  # 默认压缩包下载地址（回退用）
 HEADERS = {
     "User-Agent": (
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
@@ -70,19 +70,31 @@ def write_local_version(version: str) -> None:
         pass
 
 
-def fetch_remote_version() -> str:
+def _parse_version_and_url(text: str) -> tuple[str, str | None]:
+    """
+    解析 version.txt，格式: version|url
+    无 | 时仅返回版本，url 为 None。
+    """
+    raw = text.strip()
+    if "|" in raw:
+        ver, url = raw.split("|", 1)
+        return ver.strip(), url.strip() or None
+    return raw, None
+
+
+def fetch_remote_version() -> tuple[str, str | None]:
     try:
         resp = requests.get(VERSION_URL, timeout=10, headers=HEADERS, allow_redirects=True)
         resp.raise_for_status()
-        return resp.text.strip()
+        return _parse_version_and_url(resp.text)
     except Exception as exc:  # noqa: BLE001
         print(f"[launcher] 获取远程版本失败: {exc}")
-        return ""
+        return "", None
 
 
-def download_new_zip() -> Path | None:
+def download_new_zip(url: str) -> Path | None:
     try:
-        resp = requests.get(ZIP_URL, stream=True, timeout=60, headers=HEADERS, allow_redirects=True)
+        resp = requests.get(url, stream=True, timeout=60, headers=HEADERS, allow_redirects=True)
         resp.raise_for_status()
         fd, tmp_path = tempfile.mkstemp(prefix="main_bot_", suffix=".zip")
         with os.fdopen(fd, "wb") as tmp_file:
@@ -153,7 +165,7 @@ def _replace_with_retry(new_exe: Path, target_path: Path, retries: int = 3, dela
 
 # ============== 更新流程 ==============
 def perform_update() -> None:
-    remote_version = fetch_remote_version()
+    remote_version, remote_url = fetch_remote_version()
     if not remote_version:
         return
 
@@ -162,8 +174,13 @@ def perform_update() -> None:
         print("[launcher] 已是最新版本，无需更新。")
         return
 
+    download_url = remote_url or ZIP_URL
+    if not download_url:
+        print("[launcher] 远程版本文件格式错误，未找到下载链接")
+        return
+
     print(f"[launcher] 检测到新版本 {remote_version}，开始下载...")
-    tmp_zip = download_new_zip()
+    tmp_zip = download_new_zip(download_url)
     if not tmp_zip:
         return
 
