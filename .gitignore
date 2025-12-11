@@ -1,0 +1,26 @@
+.env
+logs/
+__pycache__/
+# --- 必须忽略的敏感文件 ---
+config.ini
+config.py  # 如果你之前在里面写死过Key，最好也检查一下，现在用ini文件后这个文件应该是安全的
+*.key
+*.secret
+
+# --- 必须忽略的打包垃圾文件 ---
+build/
+dist/
+*.spec
+__pycache__/
+*.pyc
+
+# --- 忽略虚拟环境 ---
+venv/
+.venv/
+
+# --- 忽略IDE配置 ---
+.idea/
+.vscode/
+
+# --- 忽略生成的 EXE ---
+*.exe
