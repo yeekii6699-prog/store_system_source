@@ -60,6 +60,13 @@ def run_bot(stop_event: threading.Event, cfg: dict[str, str]) -> None:
     )
     wechat = WeChatRPA(exec_path=cfg.get("WECHAT_EXEC_PATH", ""))
     processed_cache = set()
+    welcome_enabled = (cfg.get("WELCOME_ENABLED") or "0") == "1"
+    welcome_text = (cfg.get("WELCOME_TEXT") or "").strip()
+    welcome_images = [item.strip() for item in (cfg.get("WELCOME_IMAGE_PATHS") or "").split("|") if item.strip()]
+    if welcome_enabled and not (welcome_text or welcome_images):
+        logger.warning("已启用首次欢迎包，但没有配置文案或图片，将跳过自动发送以免空消息。")
+        welcome_enabled = False
+    welcome_cache: set[str] = set()
 
     logger.info("系统启动，开始轮询飞书任务...")
 
@@ -134,6 +141,27 @@ def run_bot(stop_event: threading.Event, cfg: dict[str, str]) -> None:
                 verify_msg = f"您好 {name}，这里是 Store 数字运营系统，请通过好友以便后续沟通。"
                 result = wechat.add_friend(phone, verify_msg=verify_msg)
                 logger.info("RPA执行结果 [{}]: {}", phone, result)
+
+                should_send_welcome = (
+                    welcome_enabled
+                    and result == "added"
+                    and phone not in welcome_cache
+                )
+                if should_send_welcome:
+                    welcome_cache.add(phone)
+                    search_keys = [phone]
+                    if name:
+                        search_keys.append(name)
+                        search_keys.append(f"{phone}-{name}")
+                    try:
+                        sent = wechat.send_welcome_package(search_keys, welcome_text, welcome_images)
+                        if sent:
+                            logger.info("已自动发送门店指引给 [{}]", phone)
+                        else:
+                            # Plan B: 若无法自动发送，提醒前台人工补发，避免客户冷场。
+                            logger.warning("自动欢迎包未成功发送 [{}]，请人工确认。", phone)
+                    except Exception as welcome_err:  # noqa: BLE001
+                        logger.warning("发送欢迎包异常 [{}]: {}", phone, welcome_err)
 
                 if record_id:
                     try:

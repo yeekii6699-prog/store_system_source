@@ -7,6 +7,7 @@ from typing import Dict, Tuple
 from dotenv import load_dotenv
 from tkinter import BooleanVar, StringVar, Tk, filedialog, messagebox
 from tkinter import ttk
+from tkinter.scrolledtext import ScrolledText
 
 # ============== 路径与配置文件定位 ==============
 if getattr(sys, "frozen", False):
@@ -18,6 +19,7 @@ else:
 
 ENV_PATH = BASE_DIR / ".env"
 CONFIG_PATH = BASE_DIR / "config.ini"
+WELCOME_IMAGE_DELIMITER = "|"
 
 # 尝试加载 .env（保留对旧配置方式的兼容）
 load_dotenv(ENV_PATH)
@@ -92,6 +94,11 @@ def _collect_defaults() -> Dict[str, str]:
             or detected_wechat
             or ""
         ).strip(),
+        "WELCOME_ENABLED": (os.getenv("WELCOME_ENABLED") or default_section.get("WELCOME_ENABLED", "0")).strip(),
+        "WELCOME_TEXT": (os.getenv("WELCOME_TEXT") or default_section.get("WELCOME_TEXT", "")).strip(),
+        "WELCOME_IMAGE_PATHS": (
+            os.getenv("WELCOME_IMAGE_PATHS") or default_section.get("WELCOME_IMAGE_PATHS", "")
+        ).strip(),
     }
 
 
@@ -119,6 +126,13 @@ def _prompt_full_config(defaults: Dict[str, str]) -> Tuple[Dict[str, str], bool]
         key: StringVar(value=defaults.get(key, "")) for key in field_labels
     }
     remember_var = BooleanVar(value=CONFIG_PATH.exists())
+    welcome_enabled_var = BooleanVar(value=defaults.get("WELCOME_ENABLED", "0") == "1")
+    welcome_text_default = defaults.get("WELCOME_TEXT", "")
+    welcome_images: list[str] = [
+        item.strip()
+        for item in defaults.get("WELCOME_IMAGE_PATHS", "").split(WELCOME_IMAGE_DELIMITER)
+        if item.strip()
+    ]
 
     frame = ttk.Frame(root, padding=12)
     frame.pack(fill="both", expand=True)
@@ -143,6 +157,54 @@ def _prompt_full_config(defaults: Dict[str, str]) -> Tuple[Dict[str, str], bool]
         row=len(field_labels), column=0, columnspan=2, sticky="w", pady=8
     )
 
+    welcome_frame = ttk.LabelFrame(frame, text="首次欢迎包配置（可选）", padding=(10, 8))
+    welcome_row = len(field_labels) + 1
+    welcome_frame.grid(row=welcome_row, column=0, columnspan=3, sticky="nsew", pady=(8, 0))
+    welcome_frame.columnconfigure(1, weight=1)
+
+    ttk.Checkbutton(
+        welcome_frame,
+        text="启用加好友成功后自动发送门店指引",
+        variable=welcome_enabled_var,
+    ).grid(row=0, column=0, columnspan=3, sticky="w")
+
+    ttk.Label(welcome_frame, text="欢迎文案").grid(row=1, column=0, sticky="nw", pady=(6, 0))
+    welcome_text_widget = ScrolledText(welcome_frame, width=50, height=4, wrap="word")
+    welcome_text_widget.insert("1.0", welcome_text_default)
+    welcome_text_widget.grid(row=1, column=1, columnspan=2, sticky="ew", pady=(6, 0))
+
+    ttk.Label(welcome_frame, text="图片附件").grid(row=2, column=0, sticky="nw", pady=(8, 0))
+    images_label = ttk.Label(welcome_frame, text="", anchor="w", justify="left")
+    images_label.grid(row=2, column=1, sticky="ew", pady=(8, 0))
+
+    def _refresh_images_label() -> None:
+        if not welcome_images:
+            images_label.config(text="未选择任何图片")
+            return
+        preview = [Path(p).name for p in welcome_images[:3]]
+        extra = ""
+        if len(welcome_images) > 3:
+            extra = f"... 共 {len(welcome_images)} 张"
+        images_label.config(text="\n".join(preview) + (f"\n{extra}" if extra else ""))
+
+    def _add_images() -> None:
+        files = filedialog.askopenfilenames(
+            title="选择欢迎图集",
+            filetypes=[("Images", "*.png;*.jpg;*.jpeg;*.bmp;*.gif"), ("所有文件", "*.*")],
+        )
+        if not files:
+            return
+        welcome_images.extend([str(Path(f)) for f in files])
+        _refresh_images_label()
+
+    def _clear_images() -> None:
+        welcome_images.clear()
+        _refresh_images_label()
+
+    ttk.Button(welcome_frame, text="添加图片...", command=_add_images).grid(row=2, column=2, padx=(6, 0), pady=(8, 0))
+    ttk.Button(welcome_frame, text="清空", command=_clear_images).grid(row=3, column=2, padx=(6, 0), pady=(4, 0))
+    _refresh_images_label()
+
     required_keys = {"FEISHU_APP_ID", "FEISHU_APP_SECRET", "FEISHU_PROFILE_TABLE_URL", "FEISHU_TABLE_URL"}
 
     def _submit(event=None) -> None:  # noqa: ANN001
@@ -150,8 +212,12 @@ def _prompt_full_config(defaults: Dict[str, str]) -> Tuple[Dict[str, str], bool]
         values = {k: v.get().strip() for k, v in field_vars.items()}
         missing = [label for key, label in field_labels.items() if key in required_keys and not values.get(key)]
         if missing:
-            messagebox.showerror("缺少配置", f"请填写: {', '.join(missing)}")
+            messagebox.showerror("????", f"???: {', '.join(missing)}")
             return
+        welcome_text_value = welcome_text_widget.get("1.0", "end").strip()
+        values["WELCOME_ENABLED"] = "1" if welcome_enabled_var.get() else "0"
+        values["WELCOME_TEXT"] = welcome_text_value
+        values["WELCOME_IMAGE_PATHS"] = WELCOME_IMAGE_DELIMITER.join(welcome_images)
         result = values
         root.destroy()
 
@@ -159,7 +225,7 @@ def _prompt_full_config(defaults: Dict[str, str]) -> Tuple[Dict[str, str], bool]
         root.destroy()
 
     btn = ttk.Button(frame, text="保存并启动", command=_submit)
-    btn.grid(row=len(field_labels) + 1, column=0, columnspan=3, pady=8)
+    btn.grid(row=welcome_row + 1, column=0, columnspan=3, pady=8)
 
     root.bind("<Return>", _submit)
     root.protocol("WM_DELETE_WINDOW", _on_close)

@@ -7,7 +7,8 @@
 from __future__ import annotations
 
 import time
-from typing import Optional
+from pathlib import Path
+from typing import Optional, Sequence
 
 import uiautomation as auto
 from loguru import logger
@@ -195,41 +196,141 @@ class WeChatRPA:
         logger.info("已完成好友申请操作: {}", phone)
         return "added"
 
-    def send_msg(self, remark_name: str, msg: str) -> bool:
-        """
-        按备注名搜索好友并发送文本消息。
-        """
+    def _focus_chat_input(self, keyword: str):
+        keyword = (keyword or "").strip()
+        if not keyword:
+            logger.warning("未提供搜索关键词，无法打开聊天窗口")
+            return None
         if not self.activate_window():
-            return False
+            return None
 
         main = auto.WindowControl(searchDepth=1, Name="微信")
-        
-        # 1. 搜索好友
         search_box = main.EditControl(Name="搜索", searchDepth=15)
         if not search_box.Exists(3):
-            logger.error("找不到搜索框")
-            return False
+            search_box = main.EditControl(Name="Search", searchDepth=15)
+            if not search_box.Exists(1):
+                logger.error("未找到搜索输入框")
+                return None
 
         search_box.Click()
+        time.sleep(0.2)
         search_box.SendKeys("{Ctrl}a")
         time.sleep(0.1)
         search_box.SendKeys("{Delete}")
-        search_box.SendKeys(remark_name)
+        search_box.SendKeys(keyword)
         time.sleep(1.0)
         search_box.SendKeys("{Enter}")
         time.sleep(0.5)
 
-        # 2. 定位聊天输入框
         input_box = main.EditControl(AutomationId="chat_input_field", searchDepth=20)
-        
         if not input_box.Exists(2):
             logger.error("未找到聊天输入框")
+            return None
+        input_box.Click()
+        return input_box
+
+    def _send_text_block(self, input_box, text: str) -> None:
+        lines = text.splitlines()
+        if not lines:
+            return
+        for idx, line in enumerate(lines):
+            if line:
+                input_box.SendKeys(line)
+            if idx < len(lines) - 1:
+                input_box.SendKeys("{Shift}{Enter}")
+        input_box.SendKeys("{Enter}")
+        time.sleep(0.3)
+
+    def _send_image_file(self, input_box, image_path: str) -> bool:
+        path = Path(image_path).expanduser()
+        if not path.exists():
+            logger.warning("欢迎包图片不存在: {}", path)
             return False
 
-        input_box.Click()
+        input_box.SendKeys("^o")
+        time.sleep(0.6)
+
+        dialog = auto.WindowControl(ClassName="#32770")
+        if not dialog.Exists(2):
+            dialog = auto.WindowControl(Name="打开")
+        if not dialog.Exists(1):
+            logger.error("未唤起发送文件窗口")
+            return False
+
+        filename_edit = dialog.EditControl(searchDepth=6)
+        if not filename_edit.Exists(1):
+            logger.error("未找到文件选择输入框")
+            return False
+
+        filename_edit.Click()
+        filename_edit.SendKeys("{Ctrl}a")
+        filename_edit.SendKeys(str(path))
+
+        open_btn = None
+        for btn_name in ("打开", "Open"):
+            candidate = dialog.ButtonControl(Name=btn_name)
+            if candidate.Exists(0.2):
+                open_btn = candidate
+                break
+        if open_btn:
+            open_btn.Click()
+        else:
+            filename_edit.SendKeys("{Enter}")
+
+        time.sleep(0.8)
+        input_box.SendKeys("{Enter}")
+        time.sleep(0.4)
+        logger.info("已发送图片 {}", path.name)
+        return True
+
+    def send_welcome_package(self, search_keys: Sequence[str], text: str, image_paths: Sequence[str]) -> bool:
+        """
+        根据关键词定位好友，发送首条欢迎文案与图片资料。
+        """
+        candidates = [key.strip() for key in search_keys if key and key.strip()]
+        if not candidates:
+            logger.warning("欢迎包缺少搜索关键词，跳过发送")
+            return False
+
+        input_box = None
+        for keyword in candidates:
+            input_box = self._focus_chat_input(keyword)
+            if input_box:
+                break
+
+        if input_box is None:
+            logger.error("未能打开聊天窗口，欢迎包发送失败")
+            return False
+
+        sent_any = False
+        text = text.strip()
+        if text:
+            self._send_text_block(input_box, text)
+            sent_any = True
+
+        for image in image_paths:
+            if self._send_image_file(input_box, image):
+                sent_any = True
+
+        if not sent_any:
+            logger.debug("欢迎包未包含可发送内容")
+        return sent_any
+
+    def send_msg(self, remark_name: str, msg: str) -> bool:
+        """
+        按备注名搜索好友并发送文本消息。
+        """
+        msg = (msg or "").strip()
+        if not msg:
+            logger.warning("发送内容为空，忽略 send_msg 调用")
+            return False
+
+        input_box = self._focus_chat_input(remark_name)
+        if input_box is None:
+            return False
+
         input_box.SendKeys(msg)
         time.sleep(0.2)
         input_box.SendKeys("{ENTER}")
-        
         logger.info("已向 {} 发送消息", remark_name)
         return True
