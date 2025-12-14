@@ -18,23 +18,32 @@
 - PC 微信 RPA：搜索手机号、发送好友申请，支持自定义验证语；好友通过请直接在工作微信开启“自动通过好友验证”，系统不再额外模拟点击，避免多余操作。
 - 首次欢迎包：勾选 GUI 中的欢迎配置后，可上传多张门店指引图片与多行文案，系统在首次加好友成功后立即推送，减少人工复制粘贴。
 - GUI 主控台：启动即显示窗口，后台线程跑业务，可实时查看日志，手动停止立即退出。
+- 飞书远程告警：loguru ERROR/CRITICAL 日志会通过 webhook 推送到指定群聊（带 60s 冷却），方便远程调度排障。
 - 热更新启动器：读取远程 `version.txt` 的 `版本|zip直链`，下载解压 `main_bot.exe` 替换本地。
 
-## 目录结构
+## 目录结构（组件化）
 ```
 .
 |-- README.md
-|-- RELEASE_GUIDE.md          # 发布与热更新操作手册
+|-- RELEASE_GUIDE.md
 |-- requirements.txt
-|-- config.ini                # 运行时生成的配置文件
-|-- config.py                 # 配置加载与 Tk 界面
-|-- launcher.py               # 热更新启动器
+|-- config.ini                 # 运行后生成/保存用户配置
+|-- launcher.py                # 热更新启动器
 |-- src
-|   |-- main.py               # GUI + 后台业务线程
-|   |-- feishu_client.py      # 飞书 API/Wiki 转 Base 封装
-|   |-- wechat_bot.py         # 微信 RPA
-|   |-- inspect_tables.py     # 打印表结构样例
-|   `-- debug_feishu.py
+|   |-- main.py                # 简化入口：logger -> 自检 -> ConsoleApp
+|   |-- config/
+|   |   |-- settings.py        # GUI 配置与持久化（原 config.py）
+|   |   `-- logger.py          # 日志 & 飞书 webhook sink
+|   |-- core/
+|   |   |-- system.py          # DPI、自检、环境检测
+|   |   `-- engine.py          # TaskEngine（飞书轮询 + 微信 RPA）
+|   |-- services/
+|   |   |-- feishu.py          # 飞书客户端封装
+|   |   `-- wechat.py          # 微信 RPA 实现
+|   |-- ui/
+|   |   `-- console.py         # Tk 控制台（日志/按钮/状态）
+|   `-- utils/
+|       `-- table_inspector.py # 飞书表结构辅助脚本
 `-- .env.example
 ```
 
@@ -87,7 +96,7 @@ python -m src.main
 
 ### 查看飞书字段样例
 ```bash
-python -m src.inspect_tables
+python -m src.utils.table_inspector
 ```
 
 ## 日志

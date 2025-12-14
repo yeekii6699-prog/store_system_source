@@ -1,22 +1,26 @@
 # src · AGENT NOTES
 
 ## Module Map
-- `main.py`：Tkinter GUI + 业务主循环，负责加载配置、启动后台线程、管理日志/停止事件。
-- `feishu_client.py`：封装飞书 OpenAPI / Wiki→Base Token 逻辑，统一处理身份、表结构、字段映射。
-- `wechat_bot.py`：PC 微信 RPA（uiautomation/pyautogui），包含搜号、加好友、设置备注、发送欢迎语等动作。
-- `inspect_tables.py`：辅助脚本，输出飞书多维表字段，便于排查配置。
-- `config.py`（仓库根目录）：GUI 配置界面与持久化逻辑，与 `main.py` 中的 UI 交互保持一致。
+- `src/main.py`：轻量入口，负责初始化日志、自检、ConsoleApp 与 TaskEngine。
+- `src/config/settings.py`：配置 GUI + `.env/config.ini` 持久化。
+- `src/config/logger.py`：loguru 设置 + 飞书 webhook 告警（60s 冷却）。
+- `src/core/system.py`：DPI 感知、环境检测、`run_self_check`。
+- `src/core/engine.py`：`TaskEngine`，封装飞书轮询与微信 RPA 双队列流程。
+- `src/services/feishu.py`：飞书 API/Wiki → Base Token 封装。
+- `src/services/wechat.py`：PC 微信 RPA（uiautomation），包含搜号、加好友、欢迎包发送。
+- `src/ui/console.py`：Tk 控制台（日志队列、状态、停止按钮）。
+- `src/utils/table_inspector.py`：辅助脚本，打印飞书表字段/样例数据。
 
 ## Implementation Guardrails
-- **线程模型**：GUI 运行在主线程，业务轮询/日志监听在守护线程；涉及跨线程更新 Tk 控件要用队列或 `after`。
-- **RPA 操作**：所有坐标或控件定位必须考虑 Windows DPI，必要时通过 `uiautomation` 名称/ControlType 绑定，避免硬编码像素。
-- **飞书客户端**：统一在 `feishu_client.py` 处理 token 刷新、表字段映射；新增字段/表时先扩展这里再调用。
-- **日志**：继续使用 `queue.Queue` + Tk 文本框刷新，保持用户可视化反馈；磁盘日志使用 `logs/run.log`（自动轮转）。
-- **配置**：优先读取 `.env` / 环境变量，其次 GUI 输入，最后回落 `config.ini`；新增配置项时同步更新 README。
+- **线程模型**：Tk Console 在主线程，`TaskEngine`（后台轮询）在守护线程；跨线程刷新 UI 一律通过日志队列或 `after`。
+- **RPA 操作**：全部控件定位依赖 `uiautomation`，并在 `core/system.py` 配置 DPI 感知；禁止硬编码像素坐标。
+- **飞书客户端**：token 刷新、表字段映射统一藏在 `src/services/feishu.py`，新增字段前先扩展此处。
+- **日志**：`src/config/logger.py` 负责本地文件 + 控制台 + 飞书 webhook；UI 侧仍用 `queue.Queue` 取日志，避免直接操作 loguru。
+- **配置**：依次读取 `.env` → `config.ini` → GUI；新增配置记得同步 README/设置界面与 `TaskEngine` 参数。
 
 ## Testing Tips
-- 源码运行：`python -m src.main`，确认 GUI 能加载配置 & 线程退出调用 `os._exit(0)`。
-- API 排查：用 `python -m src.inspect_tables` 查看飞书表schema，再对照 `PROJECT_OVERVIEW.md`。
-- RPA 调试：使用 Windows 前台环境，必要时在 `wechat_bot.py` 中增加可控延迟，确保兼容店内 PC。
+- 源码运行：`python -m src.main`，观察 ConsoleApp、TaskEngine 是否正常拉起并能停止。
+- API 排查：`python -m src.utils.table_inspector` 查看飞书表 schema，再对照 `PROJECT_OVERVIEW.md`。
+- RPA 调试：使用 Windows 前台环境，可在 `src/services/wechat.py` 中临时增加延迟或日志，确认控件定位。
 
 保持这些约定，任何模块改动都能与整套门店自动化方案协同运行。 ***

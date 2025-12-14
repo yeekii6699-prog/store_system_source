@@ -51,7 +51,7 @@ def feishu_sink(message) -> None:  # type: ignore[override]
 
 def setup_logger() -> None:
     """初始化 loguru，输出到控制台、本地文件与飞书。"""
-    logs_dir = Path(__file__).resolve().parent.parent / "logs"
+    logs_dir = Path(__file__).resolve().parents[2] / "logs"
     logs_dir.mkdir(parents=True, exist_ok=True)
 
     logger.remove()

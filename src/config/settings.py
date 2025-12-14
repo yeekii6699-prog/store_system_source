@@ -12,11 +12,9 @@ from tkinter.scrolledtext import ScrolledText
 
 # ============== 路径与配置文件定位 ==============
 if getattr(sys, "frozen", False):
-    # PyInstaller 打包后的 exe 所在目录
     BASE_DIR = Path(sys.executable).resolve().parent
 else:
-    # 源码运行
-    BASE_DIR = Path(__file__).resolve().parent
+    BASE_DIR = Path(__file__).resolve().parents[2]
 
 ENV_PATH = BASE_DIR / ".env"
 CONFIG_PATH = BASE_DIR / "config.ini"

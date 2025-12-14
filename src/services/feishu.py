@@ -11,7 +11,7 @@ from urllib.parse import parse_qs, urlparse
 import requests
 from loguru import logger
 
-from config import get_config
+from src.config.settings import get_config
 
 
 class FeishuClient:

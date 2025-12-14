@@ -9,8 +9,8 @@ from pprint import pprint
 
 from loguru import logger
 
-from config import FEISHU_PROFILE_TABLE_URL, FEISHU_TABLE_URL
-from src.feishu_client import FeishuClient
+from src.config.settings import get_config
+from src.services.feishu import FeishuClient
 
 
 def print_table_info(title: str, table_url: str, sample_size: int = 5) -> None:
@@ -37,8 +37,9 @@ def main() -> None:
     """
     查看任务表与客户表字段/样例。
     """
-    print_table_info("任务表（待办/处理状态表）", FEISHU_TABLE_URL)
-    print_table_info("客户表（资料表）", FEISHU_PROFILE_TABLE_URL)
+    cfg = get_config()
+    print_table_info("任务表（待办/处理状态表）", cfg["FEISHU_TABLE_URL"])
+    print_table_info("客户表（资料表）", cfg["FEISHU_PROFILE_TABLE_URL"])
 
 
 if __name__ == "__main__":
