@@ -55,7 +55,8 @@ def setup_logger() -> None:
     logs_dir.mkdir(parents=True, exist_ok=True)
 
     logger.remove()
-    logger.add(sys.stderr, level="INFO", format="{time:YYYY-MM-DD HH:mm:ss} | {level} | {message}")
+    if sys.stderr:
+        logger.add(sys.stderr, level="INFO", format="{time:YYYY-MM-DD HH:mm:ss} | {level} | {message}")
     logger.add(
         logs_dir / "shop_os_{time}.log",
         rotation="00:00",
@@ -64,4 +65,3 @@ def setup_logger() -> None:
         level="DEBUG",
     )
     logger.add(feishu_sink, level="WARNING")
-
