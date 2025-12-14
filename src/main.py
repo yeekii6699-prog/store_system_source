@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import json
 import os
 import queue
 import sys
@@ -14,7 +15,13 @@ from pathlib import Path
 from tkinter import Tk, messagebox, ttk
 from tkinter.scrolledtext import ScrolledText
 
-import requests
+from typing import Any
+
+try:
+    import pythoncom
+except ImportError:  # pragma: no cover - pywin32 only on Windows
+    pythoncom = None
+
 from loguru import logger
 
 from config import get_config
@@ -44,14 +51,100 @@ def _queue_sink(message) -> None:  # type: ignore[override]
 logger.add(_queue_sink, format="{time:YYYY-MM-DD HH:mm:ss} | {level} | {message}")
 
 
+def _normalize_welcome_step(data: Any) -> dict[str, str] | None:
+    action = str((data or {}).get("type") or "").strip().lower()
+    if action == "text":
+        content = str(data.get("content") or "").strip()
+        if content:
+            return {"type": "text", "content": content}
+    elif action == "image":
+        path = str(data.get("path") or "").strip()
+        if path:
+            return {"type": "image", "path": path}
+    elif action == "link":
+        url = str(data.get("url") or "").strip()
+        if url:
+            step: dict[str, str] = {"type": "link", "url": url}
+            title = str(data.get("title") or "").strip()
+            if title:
+                step["title"] = title
+            return step
+    return None
+
+
+def _load_welcome_steps(cfg: dict[str, str]) -> list[dict[str, str]]:
+    steps: list[dict[str, str]] = []
+    raw = (cfg.get("WELCOME_STEPS") or "").strip()
+    if raw:
+        try:
+            parsed = json.loads(raw)
+            if isinstance(parsed, list):
+                for item in parsed:
+                    if isinstance(item, dict):
+                        normalized = _normalize_welcome_step(item)
+                        if normalized:
+                            steps.append(normalized)
+        except json.JSONDecodeError as exc:
+            logger.warning("欢迎步骤配置解析失败，将回落至旧版字段: {}", exc)
+
+    if not steps:
+        legacy_text = (cfg.get("WELCOME_TEXT") or "").strip()
+        if legacy_text:
+            steps.append({"type": "text", "content": legacy_text})
+        legacy_images = [
+            part.strip()
+            for part in (cfg.get("WELCOME_IMAGE_PATHS") or "").split("|")
+            if part.strip()
+        ]
+        for image in legacy_images:
+            steps.append({"type": "image", "path": image})
+    return steps
+
+
+def _extract_phone_and_name(fields: dict[str, Any]) -> tuple[str, str]:
+    raw_phone = fields.get("手机号")
+    phone: str = ""
+    if isinstance(raw_phone, str):
+        phone = raw_phone.strip()
+    elif isinstance(raw_phone, (int, float)):
+        phone = str(int(raw_phone))
+    elif isinstance(raw_phone, list) and raw_phone:
+        first_item = raw_phone[0]
+        if isinstance(first_item, dict):
+            phone = first_item.get("full_number") or first_item.get("text") or first_item.get("value") or ""
+        else:
+            phone = str(first_item)
+
+    phone = phone.strip()
+
+    name_value = fields.get("姓名", "")
+    name = ""
+    if isinstance(name_value, list) and name_value:
+        first = name_value[0]
+        if isinstance(first, dict):
+            name = first.get("text", "")
+        else:
+            name = str(first)
+    elif isinstance(name_value, str):
+        name = name_value
+
+    return phone, name.strip()
+
+
 def run_bot(stop_event: threading.Event, cfg: dict[str, str]) -> None:
     """
-    业务循环：
-    1. 从飞书任务表获取待处理手机号
-    2. 查询客户表判断是否已绑定
-    3. 已绑定客户跳过，新客户触发微信加好友
-    4. 回写飞书处理状态
+    主循环拆分为两个任务：
+    A. “待添加” -> 检测状态并发起申请
+    B. “已申请” -> 等待通过并发送欢迎包
     """
+    co_initialized = False
+    if pythoncom is not None:
+        try:
+            pythoncom.CoInitialize()
+            co_initialized = True
+        except Exception:
+            logger.warning("COM 初始化失败，可能影响 RPA：{}", "CoInitialize 调用异常")
+
     feishu = FeishuClient(
         app_id=cfg.get("FEISHU_APP_ID"),
         app_secret=cfg.get("FEISHU_APP_SECRET"),
@@ -59,133 +152,93 @@ def run_bot(stop_event: threading.Event, cfg: dict[str, str]) -> None:
         profile_table_url=cfg.get("FEISHU_PROFILE_TABLE_URL"),
     )
     wechat = WeChatRPA(exec_path=cfg.get("WECHAT_EXEC_PATH", ""))
-    processed_cache = set()
-    welcome_enabled = (cfg.get("WELCOME_ENABLED") or "0") == "1"
-    welcome_text = (cfg.get("WELCOME_TEXT") or "").strip()
-    welcome_images = [item.strip() for item in (cfg.get("WELCOME_IMAGE_PATHS") or "").split("|") if item.strip()]
-    if welcome_enabled and not (welcome_text or welcome_images):
-        logger.warning("已启用首次欢迎包，但没有配置文案或图片，将跳过自动发送以免空消息。")
-        welcome_enabled = False
-    welcome_cache: set[str] = set()
 
-    logger.info("系统启动，开始轮询飞书任务...")
+    welcome_enabled = (cfg.get("WELCOME_ENABLED") or "0") == "1"
+    welcome_steps = _load_welcome_steps(cfg)
+    if welcome_enabled and not welcome_steps:
+        logger.warning("已启用首次欢迎包，但没有配置任何步骤，将跳过自动发送。")
+        welcome_enabled = False
+
+    logger.info("系统启动，进入双队列任务循环...")
+
+    def handle_apply_queue() -> None:
+        tasks = feishu.fetch_tasks_by_status(["待添加"])
+        if not tasks:
+            return
+        for item in tasks:
+            record_id = item.get("record_id") or item.get("recordId")
+            fields = item.get("fields", {})
+            phone, name = _extract_phone_and_name(fields)
+            if not phone:
+                logger.warning("记录缺少手机号，跳过 [{}]", record_id)
+                continue
+
+            relationship = wechat.check_relationship(phone)
+            logger.info("[申请队列] 手机:{}, 关系检测: {}", phone, relationship)
+            if relationship == "friend":
+                logger.info("{} 已经是好友，进入发送队列", phone)
+                feishu.update_status(record_id, "已申请")
+                continue
+            if relationship == "stranger":
+                if wechat.apply_friend(phone):
+                    feishu.update_status(record_id, "已申请")
+                else:
+                    logger.warning("申请发送失败 [{}]", phone)
+                continue
+            logger.warning("无法确定 [{}] 关系状态，稍后重试", phone)
+
+    def handle_welcome_queue() -> None:
+        tasks = feishu.fetch_tasks_by_status(["已申请"])
+        if not tasks:
+            return
+        for item in tasks:
+            record_id = item.get("record_id") or item.get("recordId")
+            fields = item.get("fields", {})
+            phone, name = _extract_phone_and_name(fields)
+            if not phone:
+                logger.warning("记录缺少手机号，跳过 [{}]", record_id)
+                continue
+
+            relationship = wechat.check_relationship(phone)
+            logger.info("[欢迎队列] 手机:{}, 关系检测: {}", phone, relationship)
+            if relationship != "friend":
+                logger.debug("{} 尚未通过验证，等待下一轮", phone)
+                continue
+
+            send_ok = True
+            if welcome_enabled and welcome_steps:
+                search_keys = [phone]
+                if name:
+                    search_keys.append(name)
+                    search_keys.append(f"{phone}-{name}")
+                try:
+                    send_ok = wechat.send_welcome_package(search_keys, welcome_steps)
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning("发送欢迎包异常 [{}]: {}", phone, exc)
+                    send_ok = False
+
+            if send_ok:
+                feishu.update_status(record_id, "已绑定")
+            else:
+                logger.warning("{} 欢迎消息发送失败，保持“已申请”供人工处理", phone)
 
     while not stop_event.is_set():
         try:
-            tasks = feishu.fetch_new_tasks()
-            if not tasks:
-                time.sleep(5)
-                continue
-
-            for item in tasks:
-                if stop_event.is_set():
-                    break
-
-                record_id = item.get("record_id") or item.get("recordId")
-
-                if record_id in processed_cache:
-                    continue
-
-                fields = item.get("fields", {})
-                raw_phone = fields.get("手机号")
-                status = fields.get("微信绑定状态", "")
-
-                phone: str = ""
-                if isinstance(raw_phone, str):
-                    phone = raw_phone.strip()
-                elif isinstance(raw_phone, (int, float)):
-                    phone = str(int(raw_phone))
-                elif isinstance(raw_phone, list) and raw_phone:
-                    first_item = raw_phone[0]
-                    if isinstance(first_item, dict):
-                        phone = first_item.get("full_number") or first_item.get("text") or first_item.get("value") or ""
-                    else:
-                        phone = str(first_item)
-
-                phone = phone.strip()
-
-                if not phone:
-                    logger.warning("任务缺少手机号字段或格式异常，跳过: {}", item)
-                    if record_id:
-                        feishu.mark_processed(record_id)
-                        processed_cache.add(record_id)
-                    continue
-
-                name_value = fields.get("姓名", "")
-                name = ""
-                if isinstance(name_value, list) and name_value:
-                    first = name_value[0]
-                    if isinstance(first, dict):
-                        name = first.get("text", "")
-                    else:
-                        name = str(first)
-                elif isinstance(name_value, str):
-                    name = name_value
-
-                logger.info("处理任务 -> 手机:[{}] 姓名:[{}] 当前状态:[{}]", phone, name, status)
-
-                if status == "已添加":
-                    logger.info("状态已是[已添加]，跳过: {}", phone)
-                    if record_id:
-                        feishu.mark_processed(record_id)
-                        processed_cache.add(record_id)
-                    continue
-
-                if status == "已绑定":
-                    logger.info("状态已是[已绑定]，无需添加: {}", phone)
-                    if record_id:
-                        feishu.mark_processed(record_id)
-                        processed_cache.add(record_id)
-                    continue
-
-                verify_msg = f"您好 {name}，这里是 Store 数字运营系统，请通过好友以便后续沟通。"
-                result = wechat.add_friend(phone, verify_msg=verify_msg)
-                logger.info("RPA执行结果 [{}]: {}", phone, result)
-
-                should_send_welcome = (
-                    welcome_enabled
-                    and result == "added"
-                    and phone not in welcome_cache
-                )
-                if should_send_welcome:
-                    welcome_cache.add(phone)
-                    search_keys = [phone]
-                    if name:
-                        search_keys.append(name)
-                        search_keys.append(f"{phone}-{name}")
-                    try:
-                        sent = wechat.send_welcome_package(search_keys, welcome_text, welcome_images)
-                        if sent:
-                            logger.info("已自动发送门店指引给 [{}]", phone)
-                        else:
-                            # Plan B: 若无法自动发送，提醒前台人工补发，避免客户冷场。
-                            logger.warning("自动欢迎包未成功发送 [{}]，请人工确认。", phone)
-                    except Exception as welcome_err:  # noqa: BLE001
-                        logger.warning("发送欢迎包异常 [{}]: {}", phone, welcome_err)
-
-                if record_id:
-                    try:
-                        if result in ("added", "exists"):
-                            feishu.mark_processed(record_id)
-                            processed_cache.add(record_id)
-                        elif result == "failed":
-                            logger.error("RPA操作失败，将飞书状态改为[添加失败]")
-                            feishu.mark_failed(record_id)
-                            processed_cache.add(record_id)
-                    except requests.HTTPError as mark_err:
-                        logger.error("回写飞书失败 (HTTP): {}", mark_err)
-                    except Exception as mark_err:  # noqa: BLE001
-                        logger.error("回写飞书失败 (未知): {}", mark_err)
-
-            time.sleep(2)
-
+            handle_apply_queue()
+            handle_welcome_queue()
+            time.sleep(5)
         except Exception as exc:  # noqa: BLE001
             if stop_event.is_set():
                 break
-            logger.exception("主循环发生未知异常: {}", exc)
+            logger.exception("主循环发生异常: {}", exc)
             time.sleep(5)
 
     logger.info("停止信号已收到，退出任务轮询。")
+    if co_initialized and pythoncom is not None:
+        try:
+            pythoncom.CoUninitialize()
+        except Exception:
+            pass
 
 
 def _start_gui() -> None:
@@ -204,23 +257,73 @@ def _start_gui() -> None:
         return
     stop_event = threading.Event()
     root = Tk()
-    root.title("Store 小助手 - 运行中")
-    root.geometry("760x520")
-    root.resizable(False, False)
+    root.title("Store 小助手 · 实时监控面板")
+    root.geometry("920x620")
+    root.minsize(780, 520)
+    root.resizable(True, True)
+    root.rowconfigure(0, weight=1)
+    root.columnconfigure(0, weight=1)
 
-    main_frame = ttk.Frame(root, padding=12)
-    main_frame.pack(fill="both", expand=True)
+    palette = {
+        "bg": "#0d101a",
+        "card": "#14182a",
+        "muted": "#96a2c6",
+        "accent": "#f35b92",
+    }
+    root.configure(bg=palette["bg"])
 
-    status_label = ttk.Label(main_frame, text="正在监控飞书任务...", font=("Segoe UI", 12, "bold"))
-    status_label.pack(anchor="w", pady=(0, 8))
+    style = ttk.Style(root)
+    try:
+        style.theme_use("clam")
+    except Exception:
+        pass
+    style.configure("Main.TFrame", background=palette["bg"])
+    style.configure("Card.TFrame", background=palette["card"])
+    style.configure("Title.TLabel", background=palette["card"], foreground="#f4f6ff", font=("Microsoft YaHei UI", 15, "bold"))
+    style.configure("Subtitle.TLabel", background=palette["card"], foreground=palette["muted"], font=("Microsoft YaHei UI", 10))
+    style.configure("Log.TLabelframe", background=palette["card"], foreground="#ced8ff", padding=12)
+    style.configure("Log.TLabelframe.Label", background=palette["card"], foreground="#ced8ff")
+    style.configure("Hint.TLabel", background=palette["bg"], foreground=palette["muted"], font=("Microsoft YaHei UI", 9))
+    style.configure("Danger.TButton", font=("Microsoft YaHei UI", 11, "bold"), foreground="#ffffff", background=palette["accent"], padding=10)
+    style.map("Danger.TButton", background=[("active", "#ff77a8"), ("disabled", "#a5a5a5")], foreground=[("disabled", "#f5f5f5")])
 
-    log_box = ScrolledText(main_frame, height=24, width=90, state="disabled", wrap="word")
-    log_box.pack(fill="both", expand=True, pady=(0, 8))
+    main_frame = ttk.Frame(root, padding=(18, 18, 18, 14), style="Main.TFrame")
+    main_frame.grid(row=0, column=0, sticky="nsew")
+    main_frame.rowconfigure(1, weight=1)
+    main_frame.columnconfigure(0, weight=1)
 
-    btn_frame = ttk.Frame(main_frame)
-    btn_frame.pack(fill="x")
-    stop_btn = ttk.Button(btn_frame, text="停止程序", width=20)
-    stop_btn.pack(side="right")
+    header_frame = ttk.Frame(main_frame, padding=(18, 18), style="Card.TFrame")
+    header_frame.grid(row=0, column=0, sticky="ew", pady=(0, 16))
+    header_frame.columnconfigure(0, weight=1)
+    status_label = ttk.Label(header_frame, text="正在监控飞书任务...", style="Title.TLabel")
+    status_label.grid(row=0, column=0, sticky="w")
+    ttk.Label(header_frame, text="日志区 + 控制区都在下方啦，窗口现在能自适应，绝不再遮挡～", style="Subtitle.TLabel").grid(
+        row=1, column=0, sticky="w", pady=(6, 0)
+    )
+
+    log_frame = ttk.LabelFrame(main_frame, text="实时日志", style="Log.TLabelframe")
+    log_frame.grid(row=1, column=0, sticky="nsew")
+    log_frame.rowconfigure(0, weight=1)
+    log_frame.columnconfigure(0, weight=1)
+    log_box = ScrolledText(
+        log_frame,
+        height=18,
+        wrap="word",
+        state="disabled",
+        bg=palette["bg"],
+        fg="#e3ebff",
+        insertbackground="#e3ebff",
+        relief="flat",
+        font=("Consolas", 10),
+    )
+    log_box.grid(row=0, column=0, sticky="nsew")
+
+    btn_frame = ttk.Frame(main_frame, padding=(0, 12, 0, 0), style="Main.TFrame")
+    btn_frame.grid(row=2, column=0, sticky="ew")
+    btn_frame.columnconfigure(0, weight=1)
+    ttk.Label(btn_frame, text="想停就停，我这个小猫保镖随叫随到～", style="Hint.TLabel").grid(row=0, column=0, sticky="w")
+    stop_btn = ttk.Button(btn_frame, text="停止任务", width=18, style="Danger.TButton")
+    stop_btn.grid(row=0, column=1, sticky="e")
 
     def poll_log_queue() -> None:
         try:

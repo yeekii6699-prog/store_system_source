@@ -1,4 +1,7 @@
-"""
+﻿import os
+
+# 修复 SendKeys 语法的最终代码
+file_content = r'''"""
 src/wechat_bot.py
 基于 uiautomation 的微信 RPA 核心库 (V2 修正版)
 核心修复：
@@ -278,3 +281,10 @@ class WeChatRPA:
             except Exception as e:
                 logger.error(f"发送步骤 {i+1} 失败: {e}")
         return True
+'''
+
+target_path = os.path.join("src", "wechat_bot.py")
+with open(target_path, 'w', encoding='utf-8') as f:
+    f.write(file_content)
+
+print(f"V2 修正版已写入: {target_path}")

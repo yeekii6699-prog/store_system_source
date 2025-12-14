@@ -216,19 +216,25 @@ class FeishuClient:
         """
         获取客户表中“微信绑定状态”为“待添加”的记录，作为待处理任务。
         """
+        return self.fetch_tasks_by_status(["待添加"])
+
+    def fetch_tasks_by_status(self, statuses: List[str]) -> List[Dict[str, Any]]:
+        values = [status for status in statuses if status]
+        if not values:
+            return []
         payload = {
             "filter": {
                 "conditions": [
                     {
                         "field_name": "微信绑定状态",
                         "operator": "is",
-                        "value": ["待添加"],
+                        "value": values,
                     }
                 ],
                 "conjunction": "and",
             }
         }
-        logger.debug("拉取待处理任务，payload={}", payload)
+        logger.debug("按状态拉取任务，payload={}", payload)
         data = self._request("POST", self.profile_table_url + "/search", json=payload)
         return data.get("data", {}).get("items", [])
 
@@ -248,4 +254,13 @@ class FeishuClient:
         url = f"{self.profile_table_url}/{record_id}"
         payload = {"fields": {"微信绑定状态": "添加失败"}}
         logger.debug("标记任务添加失败: {}", record_id)
+        self._request("PUT", url, json=payload)
+
+    def update_status(self, record_id: str, status: str) -> None:
+        """
+        通用状态更新入口，便于双队列流程设置“已申请”“已绑定”等值。
+        """
+        url = f"{self.profile_table_url}/{record_id}"
+        payload = {"fields": {"微信绑定状态": status}}
+        logger.debug("更新记录 {} 状态 -> {}", record_id, status)
         self._request("PUT", url, json=payload)
