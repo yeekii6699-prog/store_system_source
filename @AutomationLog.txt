@@ -293,4 +293,10 @@ Can not load UIAutomationCore.dll.
 2025-12-14 15:36:47.186 _better_exceptions.py[340] _format_value -> Find Control Timeout(10s): {SubName: '朋友验证', ControlType: WindowControl}
 2025-12-14 15:36:58.742 _better_exceptions.py[340] _format_value -> Find Control Timeout(10s): {SubName: '朋友验证', ControlType: WindowControl}
 2025-12-14 15:37:10.335 _better_exceptions.py[340] _format_value -> Find Control Timeout(10s): {SubName: '朋友验证', ControlType: WindowControl}
-2025-12-14 15:37:22.554 _better_exceptions.py[340] _format_value -> 
+2025-12-14 15:37:22.554 _better_exceptions.py[340] _format_value -> 2025-12-14 23:00:53.358 wechat_bot.py[57] _activate_window -> Find Control Timeout(10s): {Name: '微信', ControlType: WindowControl}
+2025-12-14 23:01:03.456 _better_exceptions.py[340] _format_value -> Find Control Timeout(10s): {Name: '微信', ControlType: WindowControl}
+2025-12-14 23:01:13.549 _better_exceptions.py[340] _format_value -> Find Control Timeout(10s): {Name: '微信', ControlType: WindowControl}
+2025-12-14 23:01:23.660 _better_exceptions.py[340] _format_value -> Find Control Timeout(10s): {Name: '微信', ControlType: WindowControl}
+2025-12-14 23:01:33.763 _better_exceptions.py[340] _format_value -> Find Control Timeout(10s): {Name: '微信', ControlType: WindowControl}
+2025-12-14 23:01:43.866 _better_exceptions.py[340] _format_value -> Find Control Timeout(10s): {Name: '微信', ControlType: WindowControl}
+2025-12-15 00:27:06.715 wechat_bot.py[57] _activate_window -> 
