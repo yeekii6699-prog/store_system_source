@@ -201,16 +201,32 @@ class WeChatRPA:
             if add_btn.Exists(2):
                 add_btn.Click()
                 time.sleep(1)
-                for win_name in ("申请添加朋友", "发送好友申请", "好友验证"):
-                    win = auto.WindowControl(Name=win_name)
-                    if win.Exists(0.5):
-                        for btn_name in ("确定", "发送", "Send"):
-                            btn = win.ButtonControl(Name=btn_name)
+                confirm_windows = ("申请添加朋友", "发送好友申请", "好友验证", "通过朋友验证")
+                confirm_buttons = ("确定", "发送", "Send", "确定(&O)", "确定(&S)")
+                wait_until = time.time() + 8
+                while time.time() < wait_until and not success:
+                    for win_name in confirm_windows:
+                        win = auto.WindowControl(Name=win_name)
+                        if not win.Exists(0.2):
+                            continue
+                        for btn_name in confirm_buttons:
+                            btn = win.ButtonControl(Name=btn_name, searchDepth=8)
                             if btn.Exists(0):
                                 btn.Click()
                                 success = True
                                 break
-                        break
+                        if not success:
+                            fallback_btn = win.ButtonControl(foundIndex=1, searchDepth=8)
+                            if fallback_btn.Exists(0):
+                                fallback_btn.Click()
+                                success = True
+                        if success:
+                            end_close = time.time() + 2
+                            while win.Exists(0) and time.time() < end_close:
+                                time.sleep(0.1)
+                            break
+                    if not success:
+                        time.sleep(0.3)
                 if not success and not add_btn.Exists(0):
                     success = True
         finally:
