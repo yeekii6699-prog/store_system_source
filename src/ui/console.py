@@ -143,6 +143,6 @@ class ConsoleApp:
         """Display environment check failures with a blocking messagebox."""
         root = Tk()
         root.withdraw()
-        messagebox.showerror("环境检查失败", "\n".join(errors), parent=root)
+        messagebox.showerror("环境检查失败！", "\n".join(errors), parent=root)
         root.destroy()
 
