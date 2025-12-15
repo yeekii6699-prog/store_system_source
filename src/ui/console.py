@@ -19,7 +19,7 @@ class ConsoleApp:
         self._log_sink_id = logger.add(self._queue_sink, format="{time:YYYY-MM-DD HH:mm:ss} | {level} | {message}")
 
         self.root = Tk()
-        self.root.title("Store 小助手 · 实时监控面板")
+        self.root.title("明星 小助手 · 实时监控面板")
         self.root.geometry("920x620")
         self.root.minsize(780, 520)
         self.root.resizable(True, True)
@@ -74,7 +74,7 @@ class ConsoleApp:
         self.status_label.grid(row=0, column=0, sticky="w")
         ttk.Label(
             header_frame,
-            text="日志区 + 控制区都在下方啦，窗口现在能自适应，绝不再遮挡～",
+            text="日志区 + 控制区都在下方啦",
             style="Subtitle.TLabel",
         ).grid(row=1, column=0, sticky="w", pady=(6, 0))
 
@@ -98,7 +98,7 @@ class ConsoleApp:
         btn_frame = ttk.Frame(main_frame, padding=(0, 12, 0, 0), style="Main.TFrame")
         btn_frame.grid(row=2, column=0, sticky="ew")
         btn_frame.columnconfigure(0, weight=1)
-        ttk.Label(btn_frame, text="想停就停，我这个小猫保驾护航～", style="Hint.TLabel").grid(row=0, column=0, sticky="w")
+        ttk.Label(btn_frame, text="想停就停", style="Hint.TLabel").grid(row=0, column=0, sticky="w")
         self.stop_btn = ttk.Button(btn_frame, text="停止任务", width=18, style="Danger.TButton", command=self.stop)
         self.stop_btn.grid(row=0, column=1, sticky="e")
 
