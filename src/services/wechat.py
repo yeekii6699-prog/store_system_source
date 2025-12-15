@@ -102,6 +102,38 @@ class WeChatRPA:
             return str(keyword[0]) if len(keyword) > 0 else ""
         return str(keyword)
 
+    def _detect_relationship_state(
+        self,
+        containers: Sequence[auto.Control],
+        timeout: float = 6.0,
+    ) -> Literal["friend", "stranger", "unknown", "not_found"]:
+        friend_labels = ("发消息", "发送消息", "Message")
+        add_labels = ("添加到通讯录", "加好友", "Add to contacts")
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            for ctrl in containers:
+                if ctrl is None or not ctrl.Exists(0):
+                    continue
+                for name in friend_labels:
+                    if ctrl.ButtonControl(Name=name, searchDepth=15).Exists(0):
+                        return "friend"
+                for name in add_labels:
+                    if ctrl.ButtonControl(Name=name, searchDepth=15).Exists(0):
+                        return "stranger"
+            time.sleep(0.3)
+        has_friend = False
+        has_add = False
+        for ctrl in containers:
+            if ctrl is None or not ctrl.Exists(0):
+                continue
+            if any(ctrl.ButtonControl(Name=name, searchDepth=15).Exists(0) for name in friend_labels):
+                has_friend = True
+            if any(ctrl.ButtonControl(Name=name, searchDepth=15).Exists(0) for name in add_labels):
+                has_add = True
+        if not has_friend and not has_add:
+            return "not_found"
+        return "unknown"
+
     def _search_and_open_profile(self, keyword) -> Optional[auto.WindowControl]:
         """搜索关键词并打开资料卡"""
         keyword = self._clean_keyword(keyword)
@@ -112,26 +144,49 @@ class WeChatRPA:
             return None
             
         main = auto.WindowControl(searchDepth=1, Name=self.WINDOW_NAME)
-        search_box = main.EditControl(Name="搜索", searchDepth=15)
-        if not search_box.Exists(0.5):
-            search_box = main.EditControl(Name="Search", searchDepth=15)
-        if not search_box.Exists(2):
-            return None
+        try:
+            main.SwitchToThisWindow()
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("SwitchToThisWindow 失败：{}", exc)
+        try:
+            main.SetFocus()
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("SetFocus 失败：{}", exc)
+
+        auto.SendKeys("{Ctrl}f")
+        logger.info("⌨️ [Shortcut] 已发送 Ctrl+F 激活搜索框")
+
+        def _send_keys(text: str) -> None:
+            auto.SendKeys(text)
+            
+        def _send_keys(text: str) -> None:
+            auto.SendKeys(text)
             
         if pyperclip:
-            search_box.Click()
             time.sleep(0.1)
-            search_box.SendKeys("{Ctrl}a{Delete}")
+            _send_keys("{Ctrl}a{Delete}")
             pyperclip.copy(keyword)
             time.sleep(0.1)
-            search_box.SendKeys("{Ctrl}v")
+            _send_keys("{Ctrl}v")
         else:
-            search_box.Click()
-            search_box.SendKeys("{Ctrl}a{Delete}")
-            search_box.SendKeys(keyword)
+            _send_keys("{Ctrl}a{Delete}")
+            _send_keys(keyword)
 
-        time.sleep(1.5) 
+        time.sleep(1.5)
+
+        def _has_not_found_message() -> bool:
+            hints = ("无法找到该用户", "请检查你填写的账号是否正确")
+            for hint in hints:
+                if main.TextControl(SubName=hint, searchDepth=15).Exists(0):
+                    return True
+            tip_win = auto.WindowControl(Name="提示", searchDepth=1)
+            if tip_win.Exists(0) and tip_win.TextControl(SubName="无法找到该用户", searchDepth=6).Exists(0):
+                return True
+            return False
         
+        if _has_not_found_message():
+            return None
+
         search_list = main.ListControl(AutomationId='search_list')
         clicked = False
         if search_list.Exists(0.5):
@@ -146,10 +201,7 @@ class WeChatRPA:
                     clicked = True
         
         if not clicked:
-            search_box.SendKeys("{Enter}")
-        else:
-            time.sleep(0.2)
-            search_box.SendKeys("{Enter}")
+            _send_keys("{Enter}")
             
         profile_win = None
         end_time = time.time() + 4
@@ -162,10 +214,31 @@ class WeChatRPA:
             if profile_win:
                 break
             time.sleep(0.3)
-            
-        return profile_win
 
-    def check_relationship(self, keyword) -> Literal["friend", "stranger", "unknown"]:
+        if profile_win:
+            try:
+                profile_win.SetFocus()
+            except Exception:
+                pass
+            return profile_win
+
+        fallback_deadline = time.time() + 2
+        while time.time() < fallback_deadline:
+            if _has_not_found_message():
+                return None
+            msg_exists = main.ButtonControl(Name="发消息", searchDepth=15).Exists(0)
+            add_exists = main.ButtonControl(Name="添加到通讯录", searchDepth=15).Exists(0)
+            if msg_exists or add_exists:
+                try:
+                    main.SetFocus()
+                except Exception:
+                    pass
+                return main
+            time.sleep(0.2)
+
+        return None
+
+    def check_relationship(self, keyword) -> Literal["friend", "stranger", "unknown", "not_found"]:
         """检查关系状态"""
         keyword = self._clean_keyword(keyword)
         profile_win = self._search_and_open_profile(keyword)
@@ -174,15 +247,11 @@ class WeChatRPA:
         
         result = "unknown"
         try:
-            end_time = time.time() + 3
-            while time.time() < end_time:
-                if profile_win.ButtonControl(Name="发消息", searchDepth=10).Exists(0):
-                    result = "friend"
-                    break
-                if profile_win.ButtonControl(Name="添加到通讯录", searchDepth=10).Exists(0):
-                    result = "stranger"
-                    break
-                time.sleep(0.3)
+            main_win = auto.WindowControl(searchDepth=1, Name=self.WINDOW_NAME)
+            containers = [profile_win, main_win]
+            result = self._detect_relationship_state(containers, timeout=6.0)
+            if result != "unknown":
+                logger.info("[关系检测] {} -> {}", keyword, result)
         finally:
             if profile_win.Exists(0):
                 profile_win.SendKeys("{Esc}")

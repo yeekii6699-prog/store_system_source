@@ -177,6 +177,10 @@ class TaskEngine:
                 else:
                     logger.warning("申请发送失败 [{}]", phone)
                 continue
+            if relationship == "not_found":
+                logger.warning("未在微信中找到 [{}]，标记为“未找到”", phone)
+                feishu.update_status(record_id, "未找到")
+                continue
             logger.warning("无法确定 [{}] 关系状态，稍后重试", phone)
 
     def _handle_welcome_queue(
@@ -199,6 +203,9 @@ class TaskEngine:
 
             relationship = wechat.check_relationship(phone)
             logger.info("[欢迎队列] 手机:{}, 关系检测: {}", phone, relationship)
+            if relationship == "not_found":
+                logger.warning("[欢迎队列] {} 在微信中未找到记录，保持“已申请”待人工确认", phone)
+                continue
             if relationship != "friend":
                 logger.debug("{} 尚未通过验证，等待下一轮", phone)
                 continue
