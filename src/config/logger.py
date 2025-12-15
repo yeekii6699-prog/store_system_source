@@ -24,7 +24,7 @@ def _notify_startup() -> None:
     payload = {
         "msg_type": "text",
         "content": {
-            "text": "WeChat RPA 进程已启动，继续为宝守护业务 ❤️"
+            "text": "WeChat RPA 进程已启动，继续为你守护业务 ❤️"
         },
     }
     try:
