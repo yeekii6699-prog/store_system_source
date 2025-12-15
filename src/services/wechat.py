@@ -144,16 +144,33 @@ class WeChatRPA:
             return None
             
         main = auto.WindowControl(searchDepth=1, Name=self.WINDOW_NAME)
+
+        def _log_focus_warning(action: str, exc: Exception) -> None:  # noqa: BLE001
+            handle = getattr(main, "NativeWindowHandle", None)
+            rect = getattr(main, "BoundingRectangle", None)
+            rect_str = None
+            if rect:
+                rect_str = f"{rect.left},{rect.top},{rect.right},{rect.bottom}"
+            logger.warning(
+                "[WeChatFocus] action={} keyword={} handle={} rect={} err={}",
+                action,
+                keyword,
+                handle,
+                rect_str,
+                exc,
+            )
+
         try:
             main.SwitchToThisWindow()
         except Exception as exc:  # noqa: BLE001
-            logger.warning("SwitchToThisWindow 失败：{}", exc)
-        try:
-            main.SetFocus()
-        except Exception as exc:  # noqa: BLE001
-            logger.warning("SetFocus 失败：{}", exc)
+            _log_focus_warning("SwitchToThisWindow", exc)
+        finally:
+            try:
+                main.SetFocus()
+            except Exception as focus_exc:  # noqa: BLE001
+                _log_focus_warning("SetFocus", focus_exc)
 
-        auto.SendKeys("{Ctrl}f")
+        auto.SendKeys('{Ctrl}f')
         logger.info("⌨️ [Shortcut] 已发送 Ctrl+F 激活搜索框")
 
         def _send_keys(text: str) -> None:

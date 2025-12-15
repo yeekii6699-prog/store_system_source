@@ -17,12 +17,28 @@ COOLDOWN = 60  # 秒
 _last_push_ts: float = 0.0
 
 
+def _notify_startup() -> None:
+    """隐藏推送启动信息给飞书，防止控制台噪音。"""
+    if not FEISHU_WEBHOOK_URL or FEISHU_WEBHOOK_URL == "YOUR_WEBHOOK_URL_HERE":
+        return
+    payload = {
+        "msg_type": "text",
+        "content": {
+            "text": "WeChat RPA 进程已启动，继续为宝守护业务 ❤️"
+        },
+    }
+    try:
+        requests.post(FEISHU_WEBHOOK_URL, json=payload, timeout=5)
+    except Exception:
+        pass
+
+
 def feishu_sink(message) -> None:  # type: ignore[override]
     """将 ERROR/CRITICAL 日志推送到飞书群，包含冷却机制。"""
     global _last_push_ts
     record = message.record
     level_name = record["level"].name
-    if level_name not in {"ERROR", "CRITICAL","WARNING"}:
+    if level_name not in {"ERROR", "CRITICAL"}:
         return
 
     now = time.time()
@@ -64,4 +80,5 @@ def setup_logger() -> None:
         encoding="utf-8",
         level="DEBUG",
     )
-    logger.add(feishu_sink, level="WARNING")
+    logger.add(feishu_sink, level="ERROR")
+    _notify_startup()

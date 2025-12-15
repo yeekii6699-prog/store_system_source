@@ -142,7 +142,7 @@ class TaskEngine:
             while not self.stop_event.is_set():
                 self._handle_apply_queue(feishu, wechat)
                 self._handle_welcome_queue(feishu, wechat, welcome_enabled, welcome_steps)
-                time.sleep(5)
+                self.stop_event.wait(5)
         except Exception as exc:  # noqa: BLE001
             if not self.stop_event.is_set():
                 logger.exception("任务引擎发生未处理异常: {}", exc)
@@ -226,4 +226,3 @@ class TaskEngine:
                 feishu.update_status(record_id, "已绑定")
             else:
                 logger.warning("{} 欢迎消息发送失败，保持“已申请”供人工处理", phone)
-
