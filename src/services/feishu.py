@@ -40,6 +40,9 @@ class FeishuClient:
         profile_url = profile_table_url or cfg["FEISHU_PROFILE_TABLE_URL"]
         self.task_table_url = self._normalize_table_url(task_url)
         self.profile_table_url = self._normalize_table_url(profile_url)
+        self.profile_field_phone = cfg.get("FEISHU_FIELD_PHONE", "") or "手机号"
+        self.profile_field_name = cfg.get("FEISHU_FIELD_NAME", "") or "姓名"
+        self.profile_field_remark = cfg.get("FEISHU_FIELD_REMARK", "") or "微信备注"
 
     # ========================= 基础请求 =========================
     def get_token(self) -> str:
@@ -264,3 +267,58 @@ class FeishuClient:
         payload = {"fields": {"微信绑定状态": status}}
         logger.debug("更新记录 {} 状态 -> {}", record_id, status)
         self._request("PUT", url, json=payload)
+
+    # ========================= 被动写入资料 =========================
+    def _find_profile_by_phone(self, phone: str) -> str | None:
+        """按手机号搜索客户表，返回 record_id（若存在）。"""
+        payload = {
+            "filter": {
+                "conditions": [
+                    {
+                        "field_name": self.profile_field_phone,
+                        "operator": "is",
+                        "value": [phone],
+                    }
+                ],
+                "conjunction": "and",
+            }
+        }
+        data = self._request("POST", self.profile_table_url + "/search", json=payload)
+        items: List[Dict[str, Any]] = data.get("data", {}).get("items", [])
+        if not items:
+            return None
+        record = items[0]
+        return record.get("record_id") or record.get("recordId")
+
+    def upsert_contact_profile(self, phone: str, name: str | None = None, remark: str | None = None) -> str:
+        """
+        将微信号写入“手机号”字段，若已存在则更新姓名/备注，否则创建记录。
+        返回记录 ID（存在或新建）。
+        """
+        phone = (phone or "").strip()
+        if not phone:
+            raise ValueError("phone is required for upsert_contact_profile")
+
+        fields: Dict[str, Any] = {self.profile_field_phone: phone}
+        if name:
+            fields[self.profile_field_name] = name
+        if remark:
+            fields[self.profile_field_remark] = remark
+
+        record_id = self._find_profile_by_phone(phone)
+        if record_id:
+            url = f"{self.profile_table_url}/{record_id}"
+            logger.debug("被动写入：更新已有记录 {} -> {}", record_id, fields)
+            self._request("PUT", url, json={"fields": fields})
+            return record_id
+
+        logger.debug("被动写入：新增记录 -> {}", fields)
+        data = self._request("POST", self.profile_table_url, json={"fields": fields})
+        return (
+            data.get("data", {})
+            .get("record", {})
+            .get("record_id")
+            or data.get("data", {})
+            .get("record", {})
+            .get("recordId", "")
+        )

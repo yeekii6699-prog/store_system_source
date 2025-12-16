@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import random
 import threading
 import time
 from typing import Any, Dict, List, Tuple
@@ -101,18 +102,44 @@ class TaskEngine:
         self.cfg = cfg
         self.stop_event = threading.Event()
         self._thread: threading.Thread | None = None
+        self._passive_thread: threading.Thread | None = None
+        self.wechat_lock = threading.Lock()
+        self.feishu: FeishuClient | None = None
+        self.wechat: WeChatRPA | None = None
+        self.welcome_enabled: bool = False
+        self.welcome_steps: List[Dict[str, str]] = []
+        self.passive_keywords: List[str] = ["已添加你为朋友", "你已添加了", "现在可以开始聊天了"]
+        self.passive_scan_interval: float = float(self.cfg.get("PASSIVE_SCAN_INTERVAL") or 90)
+        self.passive_scan_jitter: float = float(self.cfg.get("PASSIVE_SCAN_JITTER") or 30)
 
     def start(self) -> None:
         if self._thread and self._thread.is_alive():
             return
         self.stop_event.clear()
+        self.feishu = FeishuClient(
+            app_id=self.cfg.get("FEISHU_APP_ID"),
+            app_secret=self.cfg.get("FEISHU_APP_SECRET"),
+            task_table_url=self.cfg.get("FEISHU_TABLE_URL"),
+            profile_table_url=self.cfg.get("FEISHU_PROFILE_TABLE_URL"),
+        )
+        self.wechat = WeChatRPA(exec_path=self.cfg.get("WECHAT_EXEC_PATH", ""))
+        self.welcome_enabled = (self.cfg.get("WELCOME_ENABLED") or "0") == "1"
+        self.welcome_steps = _load_welcome_steps(self.cfg)
+        if self.welcome_enabled and not self.welcome_steps:
+            logger.warning("å·²å¯ç”¨é¦–æ¬¡æ¬¢è¿ŽåŒ…ï¼Œä½†æ²¡æœ‰é…ç½®ä»»ä½•æ­¥éª¤ï¼Œå°†è·³è¿‡è‡ªåŠ¨å‘é€?ã€?")
+            self.welcome_enabled = False
+
         self._thread = threading.Thread(target=self._run, name="task-engine", daemon=True)
         self._thread.start()
+        self._passive_thread = threading.Thread(target=self._run_passive_monitor, name="passive-monitor", daemon=True)
+        self._passive_thread.start()
 
     def stop(self) -> None:
         self.stop_event.set()
         if self._thread and self._thread.is_alive():
             self._thread.join(timeout=2)
+        if self._passive_thread and self._passive_thread.is_alive():
+            self._passive_thread.join(timeout=2)
 
     def _run(self) -> None:
         co_initialized = False
@@ -124,19 +151,13 @@ class TaskEngine:
                 logger.warning("COM 初始化失败，可能影响 RPA：{}", "CoInitialize 调用异常")
 
         try:
-            feishu = FeishuClient(
-                app_id=self.cfg.get("FEISHU_APP_ID"),
-                app_secret=self.cfg.get("FEISHU_APP_SECRET"),
-                task_table_url=self.cfg.get("FEISHU_TABLE_URL"),
-                profile_table_url=self.cfg.get("FEISHU_PROFILE_TABLE_URL"),
-            )
-            wechat = WeChatRPA(exec_path=self.cfg.get("WECHAT_EXEC_PATH", ""))
-
-            welcome_enabled = (self.cfg.get("WELCOME_ENABLED") or "0") == "1"
-            welcome_steps = _load_welcome_steps(self.cfg)
-            if welcome_enabled and not welcome_steps:
-                logger.warning("已启用首次欢迎包，但没有配置任何步骤，将跳过自动发送。")
-                welcome_enabled = False
+            feishu = self.feishu
+            wechat = self.wechat
+            welcome_enabled = self.welcome_enabled
+            welcome_steps = self.welcome_steps
+            if feishu is None or wechat is None:
+                logger.error("未初始化飞书/微信客户端，系统不能启动")
+                return
 
             logger.info("系统启动，进入双队列任务循环...")
             while not self.stop_event.is_set():
@@ -146,6 +167,31 @@ class TaskEngine:
         except Exception as exc:  # noqa: BLE001
             if not self.stop_event.is_set():
                 logger.exception("任务引擎发生未处理异常: {}", exc)
+        finally:
+            if co_initialized and pythoncom is not None:
+                try:
+                    pythoncom.CoUninitialize()
+                except Exception:
+                    pass
+
+    def _run_passive_monitor(self) -> None:
+        co_initialized = False
+        if pythoncom is not None:
+            try:
+                pythoncom.CoInitialize()
+                co_initialized = True
+            except Exception:
+                logger.warning("COM 初始化失败，可能影响被动监听：{}", "CoInitialize 调用异常")
+
+        try:
+            while not self.stop_event.is_set():
+                self._handle_passive_new_friends()
+                wait_seconds = self.passive_scan_interval + random.uniform(-self.passive_scan_jitter, self.passive_scan_jitter)
+                wait_seconds = max(5.0, wait_seconds)
+                self.stop_event.wait(wait_seconds)
+        except Exception as exc:  # noqa: BLE001
+            if not self.stop_event.is_set():
+                logger.exception("被动监听线程异常 {}", exc)
         finally:
             if co_initialized and pythoncom is not None:
                 try:
@@ -165,14 +211,17 @@ class TaskEngine:
                 logger.warning("记录缺少手机号，跳过 [{}]", record_id)
                 continue
 
-            relationship = wechat.check_relationship(phone)
+            with self.wechat_lock:
+                relationship = wechat.check_relationship(phone)
             logger.info("[申请队列] 手机:{}, 关系检测: {}", phone, relationship)
             if relationship == "friend":
                 logger.info("{} 已经是好友，进入发送队列", phone)
                 feishu.update_status(record_id, "已申请")
                 continue
             if relationship == "stranger":
-                if wechat.apply_friend(phone):
+                with self.wechat_lock:
+                    apply_ok = wechat.apply_friend(phone)
+                if apply_ok:
                     feishu.update_status(record_id, "已申请")
                 else:
                     logger.warning("申请发送失败 [{}]", phone)
@@ -201,7 +250,8 @@ class TaskEngine:
                 logger.warning("记录缺少手机号，跳过 [{}]", record_id)
                 continue
 
-            relationship = wechat.check_relationship(phone)
+            with self.wechat_lock:
+                relationship = wechat.check_relationship(phone)
             logger.info("[欢迎队列] 手机:{}, 关系检测: {}", phone, relationship)
             if relationship == "not_found":
                 logger.warning("[欢迎队列] {} 在微信中未找到记录，保持“已申请”待人工确认", phone)
@@ -217,7 +267,8 @@ class TaskEngine:
                     search_keys.append(name)
                     search_keys.append(f"{phone}-{name}")
                 try:
-                    send_ok = wechat.send_welcome_package(search_keys, welcome_steps)
+                    with self.wechat_lock:
+                        send_ok = wechat.send_welcome_package(search_keys, welcome_steps)
                 except Exception as exc:  # noqa: BLE001
                     logger.warning("发送欢迎包异常 [{}]: {}", phone, exc)
                     send_ok = False
@@ -226,3 +277,46 @@ class TaskEngine:
                 feishu.update_status(record_id, "已绑定")
             else:
                 logger.warning("{} 欢迎消息发送失败，保持“已申请”供人工处理", phone)
+
+    def _handle_passive_new_friends(self) -> None:
+        feishu = self.feishu
+        wechat = self.wechat
+        if feishu is None or wechat is None:
+            return
+
+        keywords = [kw for kw in self.passive_keywords if kw]
+        if not keywords:
+            keywords = ["已添加你为朋友", "现在可以开始聊天了", "你已添加了"]
+
+        with self.wechat_lock:
+            contacts = wechat.scan_passive_new_friends(keywords=keywords, max_chats=8)
+
+        if not contacts:
+            return
+
+        for contact in contacts:
+            phone = (contact.get("wechat_id") or "").strip()
+            nickname = (contact.get("nickname") or "").strip()
+            remark = (contact.get("remark") or "").strip()
+            if not phone:
+                logger.debug("被动监听到的好友缺少微信号，跳过: {}", contact)
+                continue
+
+            try:
+                feishu.upsert_contact_profile(phone=phone, name=nickname, remark=remark)
+                logger.info("[被动同步] {} -> 已写入飞书手机号字段", phone)
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("同步飞书失败 [{}]: {}", phone, exc)
+                continue
+
+            if self.welcome_enabled and self.welcome_steps:
+                search_keys = [phone]
+                if nickname:
+                    search_keys.append(nickname)
+                try:
+                    with self.wechat_lock:
+                        send_ok = wechat.send_welcome_package(search_keys, self.welcome_steps)
+                    if not send_ok:
+                        logger.warning("被动欢迎包发送失败 [{}]", phone)
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning("被动欢迎包异常 [{}]: {}", phone, exc)

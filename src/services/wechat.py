@@ -13,10 +13,19 @@ import time
 import struct
 import ctypes
 from pathlib import Path
-from typing import Optional, Sequence, Literal
+from typing import Optional, Sequence, Literal, List, Dict, TypedDict
 
 import uiautomation as auto
 from loguru import logger
+
+
+class ContactProfile(TypedDict, total=False):
+    """微信资料卡信息，用于被动同步到飞书。"""
+
+    wechat_id: str
+    nickname: Optional[str]
+    remark: Optional[str]
+
 
 # 依赖检查
 try:
@@ -380,3 +389,145 @@ class WeChatRPA:
             except Exception as e:
                 logger.error(f"发送步骤 {i+1} 失败: {e}")
         return True
+
+    def _chat_has_keywords(self, main_win: auto.WindowControl, keywords: Sequence[str]) -> bool:
+        """检测当前会话是否包含特定系统提示关键词。"""
+        for kw in keywords:
+            if not kw:
+                continue
+            if main_win.TextControl(SubName=kw, searchDepth=25).Exists(0):
+                return True
+        return False
+
+    def _open_profile_from_chat(self, main_win: auto.WindowControl) -> Optional[auto.WindowControl]:
+        """尝试从当前会话打开资料卡。"""
+        info_names = ("聊天信息", "聊天详情", "聊天资料")
+        clicked = False
+        for name in info_names:
+            btn = main_win.ButtonControl(Name=name, searchDepth=12)
+            if btn.Exists(0.5):
+                try:
+                    btn.Click()
+                    clicked = True
+                    break
+                except Exception as exc:  # noqa: BLE001
+                    logger.debug("点击资料按钮失败 [{}]: {}", name, exc)
+        if not clicked:
+            try:
+                auto.SendKeys("%i")
+                clicked = True
+            except Exception:
+                pass
+
+        if not clicked:
+            return None
+
+        end_time = time.time() + 3
+        while time.time() < end_time:
+            for title in self.PROFILE_TITLES:
+                win = auto.WindowControl(Name=title, searchDepth=1)
+                if win.Exists(0):
+                    try:
+                        win.SetFocus()
+                    except Exception:
+                        pass
+                    return win
+            time.sleep(0.2)
+        return None
+
+    def _extract_profile_info(self, profile_win: auto.WindowControl) -> Optional[ContactProfile]:
+        """从资料卡提取微信号/昵称/备注。"""
+        wechat_id: Optional[str] = None
+        nickname: Optional[str] = None
+        remark: Optional[str] = None
+
+        try:
+            name_ctrl = profile_win.TextControl(foundIndex=1, searchDepth=6)
+            if name_ctrl.Exists(0):
+                nickname = (name_ctrl.Name or "").strip()
+        except Exception:
+            pass
+
+        try:
+            for ctrl in profile_win.GetChildren():
+                try:
+                    name = getattr(ctrl, "Name", "") or ""
+                except Exception:
+                    continue
+                text = str(name).replace("：", ":").strip()
+                if not text:
+                    continue
+                if wechat_id is None and text.startswith("微信号"):
+                    parts = text.split(":", 1)
+                    if len(parts) == 2 and parts[1].strip():
+                        wechat_id = parts[1].strip()
+                if remark is None and text.startswith("备注"):
+                    parts = text.split(":", 1)
+                    if len(parts) == 2 and parts[1].strip():
+                        remark = parts[1].strip()
+        except Exception:
+            pass
+
+        if not wechat_id:
+            try:
+                edit = profile_win.EditControl(foundIndex=1, searchDepth=10)
+                if edit.Exists(0):
+                    pattern = getattr(edit, "GetValuePattern", None)
+                    if pattern:
+                        wechat_id = str(pattern().Value).strip()
+            except Exception:
+                pass
+
+        if wechat_id:
+            return {"wechat_id": wechat_id, "nickname": nickname, "remark": remark}
+        logger.debug("未从资料卡提取到微信号，可能需调整控件定位")
+        return None
+
+    def scan_passive_new_friends(self, keywords: Sequence[str], max_chats: int = 6) -> List[ContactProfile]:
+        """
+        从会话列表被动扫描“已添加”系统提示，提取资料并返回列表。
+        不访问“新的朋友”页，降低风控风险。
+        """
+        results: List[ContactProfile] = []
+        if not self._activate_window():
+            return results
+
+        main = auto.WindowControl(searchDepth=1, Name=self.WINDOW_NAME)
+        chat_list = main.ListControl(searchDepth=8)
+        if not chat_list.Exists(0.8):
+            logger.warning("未找到会话列表，跳过被动扫描")
+            return results
+
+        items = chat_list.GetChildren() if hasattr(chat_list, "GetChildren") else []
+        if not items:
+            logger.debug("会话列表为空或不可枚举，跳过被动扫描")
+            return results
+
+        for idx, item in enumerate(items[:max_chats], start=1):
+            try:
+                item.Click()
+            except Exception as exc:  # noqa: BLE001
+                logger.debug("切换会话失败 idx={} err={}", idx, exc)
+                continue
+
+            time.sleep(0.8)
+            if not self._chat_has_keywords(main, keywords):
+                continue
+
+            profile_win = self._open_profile_from_chat(main)
+            if not profile_win:
+                logger.debug("未能打开资料卡，跳过当前会话 idx={}", idx)
+                continue
+
+            try:
+                profile = self._extract_profile_info(profile_win)
+                if profile:
+                    results.append(profile)
+            finally:
+                try:
+                    profile_win.SendKeys("{Esc}")
+                except Exception:
+                    pass
+            time.sleep(0.5)
+
+        return results
