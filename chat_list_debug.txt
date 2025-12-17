@@ -1,0 +1,102 @@
+14:34:11 | 测试失败: 'Rect' object is not callable
+14:34:18 | 测试失败: 'Rect' object is not callable
+14:37:01 | 测试失败: 'Rect' object is not callable
+14:38:15 | 测试失败: 'Rect' object is not callable
+14:38:25 | 测试失败: 'Rect' object is not callable
+15:50:12 | 测试失败: 'Rect' object is not callable
+15:53:15 | 微信窗口大小: 920x732
+15:53:15 | 测试 路径1: GroupControl.ListControl(会话)
+15:53:16 | 未找到控件
+15:53:16 | 测试 路径2: GroupControl.ListControl()
+15:53:16 | 找到控件: ListControl
+15:53:16 | 控件位置: (1210, 197) 大小: 643x485
+15:53:16 | ✅ 在左侧区域
+15:53:16 | 子项数量: 3
+15:53:16 | 子项1: ListItemControl - 12:08 位置(1210, 187)
+15:53:16 | 子项2: ListItemControl - 图片 位置(1210, 228)
+15:53:16 | 子项3: ListItemControl - 图片 位置(1210, 449)
+15:53:16 | 建议使用路径2: 路径2: GroupControl.ListControl()
+15:53:23 | 微信窗口大小: 920x732
+15:53:23 | 测试 路径1: GroupControl.ListControl(会话)
+15:53:24 | 未找到控件
+15:53:24 | 测试 路径2: GroupControl.ListControl()
+15:53:24 | 找到控件: ListControl
+15:53:24 | 控件位置: (1446, 184) 大小: 643x485
+15:53:24 | ✅ 在左侧区域
+15:53:24 | 子项数量: 3
+15:53:24 | 子项1: ListItemControl - 12:08 位置(1446, 174)
+15:53:24 | 子项2: ListItemControl - 图片 位置(1446, 215)
+15:53:24 | 子项3: ListItemControl - 图片 位置(1446, 436)
+15:53:24 | 建议使用路径2: 路径2: GroupControl.ListControl()
+15:53:30 | 微信窗口大小: 920x732
+15:53:30 | 测试 路径1: GroupControl.ListControl(会话)
+15:53:31 | 未找到控件
+15:53:31 | 测试 路径2: GroupControl.ListControl()
+15:53:31 | 找到控件: ListControl
+15:53:31 | 控件位置: (1446, 184) 大小: 643x485
+15:53:31 | ✅ 在左侧区域
+15:53:31 | 子项数量: 4
+15:53:31 | 子项1: ListItemControl - 视频号李掌柜帮选工作机 位置(1446, 82)
+15:53:31 | 子项2: ListItemControl - 15:35 位置(1446, 299)
+15:53:31 | 子项3: ListItemControl - 图片 位置(1446, 340)
+15:53:31 | 建议使用路径2: 路径2: GroupControl.ListControl()
+15:58:23 | 微信窗口大小: 920x732
+15:58:23 | 测试 路径1: GroupControl.ListControl(会话)
+15:58:24 | 未找到控件
+15:58:24 | 测试 路径2: GroupControl.ListControl()
+15:58:24 | 找到控件: ListControl
+15:58:24 | 控件位置: (1446, 184) 大小: 643x485
+15:58:24 | ✅ 在左侧区域
+15:58:24 | 子项数量: 4
+15:58:24 | 子项1: ListItemControl - 视频号李掌柜帮选工作机 位置(1446, 82)
+15:58:24 | 子项2: ListItemControl - 15:35 位置(1446, 299)
+15:58:24 | 子项3: ListItemControl - 图片 位置(1446, 340)
+15:58:24 | 建议使用路径2: 路径2: GroupControl.ListControl()
+16:06:33 | 微信窗口大小: 920x732
+16:06:33 | 测试 路径1: GroupControl.ListControl(会话)
+16:06:34 | 未找到控件
+16:06:34 | 测试 路径2: GroupControl.ListControl()
+16:06:34 | 找到控件: ListControl
+16:06:34 | 控件位置: (1275, 191) 大小: 643x485
+16:06:34 | ✅ 在左侧区域
+16:06:34 | 子项数量: 3
+16:06:34 | 子项1: ListItemControl - 视频 下载2:47 位置(1275, 144)
+16:06:34 | 子项2: ListItemControl - [强][强]  位置(1275, 365)
+16:06:34 | 子项3: ListItemControl - 视频 下载1:43 位置(1275, 443)
+16:06:34 | 建议使用路径2: 路径2: GroupControl.ListControl()
+16:06:41 | 微信窗口大小: 920x732
+16:06:41 | 测试 路径1: GroupControl.ListControl(会话)
+16:06:42 | 未找到控件
+16:06:42 | 测试 路径2: GroupControl.ListControl()
+16:06:42 | 找到控件: ListControl
+16:06:42 | 控件位置: (1275, 191) 大小: 643x485
+16:06:42 | ✅ 在左侧区域
+16:06:42 | 子项数量: 5
+16:06:42 | 子项1: ListItemControl - 视频 下载2:47 位置(1275, 25)
+16:06:42 | 子项2: ListItemControl - [强][强]  位置(1275, 246)
+16:06:42 | 子项3: ListItemControl - 视频 下载1:43 位置(1275, 324)
+16:06:42 | 建议使用路径2: 路径2: GroupControl.ListControl()
+16:28:10 | 微信窗口大小: 920x732
+16:28:10 | 测试 路径1: GroupControl.ListControl(会话)
+16:28:11 | 未找到控件
+16:28:11 | 测试 路径2: GroupControl.ListControl()
+16:28:11 | 找到控件: ListControl
+16:28:11 | 控件位置: (1275, 232) 大小: 643x444
+16:28:11 | ✅ 在左侧区域
+16:28:11 | 子项数量: 4
+16:28:11 | 子项1: ListItemControl - 16:27 位置(1275, 232)
+16:28:11 | 子项2: ListItemControl - -50刚刚把你添加到通讯录，现在可以开始聊天了。 位置(1275, 273)
+16:28:11 | 子项3: ListItemControl - 我是-50  位置(1275, 306)
+16:28:11 | 建议使用路径2: 路径2: GroupControl.ListControl()
+16:32:09 | 微信窗口大小: 920x732
+16:32:09 | 测试 路径1: GroupControl.ListControl(会话)
+16:32:10 | 未找到控件
+16:32:10 | 测试 路径2: GroupControl.ListControl()
+16:32:10 | 找到控件: ListControl
+16:32:10 | 控件位置: (1275, 232) 大小: 643x444
+16:32:10 | ✅ 在左侧区域
+16:32:10 | 子项数量: 4
+16:32:10 | 子项1: ListItemControl - 16:27 位置(1275, 232)
+16:32:10 | 子项2: ListItemControl - -50刚刚把你添加到通讯录，现在可以开始聊天了。 位置(1275, 273)
+16:32:10 | 子项3: ListItemControl - 我是-50  位置(1275, 306)
+16:32:10 | 建议使用路径2: 路径2: GroupControl.ListControl()

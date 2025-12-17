@@ -99,6 +99,13 @@ def _collect_defaults() -> Dict[str, str]:
             os.getenv("WELCOME_IMAGE_PATHS") or default_section.get("WELCOME_IMAGE_PATHS", "")
         ).strip(),
         "WELCOME_STEPS": (os.getenv("WELCOME_STEPS") or default_section.get("WELCOME_STEPS", "")).strip(),
+        "MONITOR_MAX_CHATS": (os.getenv("MONITOR_MAX_CHATS") or default_section.get("MONITOR_MAX_CHATS", "6")).strip(),
+        "MONITOR_SCAN_INTERVAL": (os.getenv("MONITOR_SCAN_INTERVAL") or default_section.get("MONITOR_SCAN_INTERVAL", "30")).strip(),
+        "MONITOR_KEYWORDS": (os.getenv("MONITOR_KEYWORDS") or default_section.get("MONITOR_KEYWORDS", "已添加你为朋友,你现在可以给 ta 发送消息,打招呼消息,你们现在是好友了")).strip(),
+        "NETWORK_PROXY": (os.getenv("NETWORK_PROXY") or default_section.get("NETWORK_PROXY", "")).strip(),
+        "NETWORK_VERIFY_SSL": (os.getenv("NETWORK_VERIFY_SSL") or default_section.get("NETWORK_VERIFY_SSL", "1")).strip(),
+        "NETWORK_TIMEOUT": (os.getenv("NETWORK_TIMEOUT") or default_section.get("NETWORK_TIMEOUT", "15")).strip(),
+        "NETWORK_USE_SYSTEM_PROXY": (os.getenv("NETWORK_USE_SYSTEM_PROXY") or default_section.get("NETWORK_USE_SYSTEM_PROXY", "0")).strip(),
     }
 
 

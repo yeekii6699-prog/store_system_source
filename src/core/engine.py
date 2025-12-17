@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import random
+import requests
 import threading
 import time
 from typing import Any, Dict, List, Tuple
@@ -15,6 +16,7 @@ except ImportError:  # pragma: no cover
 
 from src.services.feishu import FeishuClient
 from src.services.wechat import WeChatRPA
+from src.config.network import network_config
 
 
 def _normalize_welcome_step(data: Dict[str, Any]) -> Dict[str, str] | None:
@@ -108,20 +110,55 @@ class TaskEngine:
         self.wechat: WeChatRPA | None = None
         self.welcome_enabled: bool = False
         self.welcome_steps: List[Dict[str, str]] = []
-        self.passive_keywords: List[str] = ["已添加你为朋友", "你已添加了", "现在可以开始聊天了"]
-        self.passive_scan_interval: float = float(self.cfg.get("PASSIVE_SCAN_INTERVAL") or 90)
-        self.passive_scan_jitter: float = float(self.cfg.get("PASSIVE_SCAN_JITTER") or 30)
+        # 不再使用硬编码的关键词，改为配置化
+        # self.passive_keywords: List[str] = ["已添加你为朋友", "你已添加了", "现在可以开始聊天了"]
+        self.passive_scan_interval: float = float(self.cfg.get("MONITOR_SCAN_INTERVAL") or 30)  # 使用配置文件中的扫描间隔
+        self.passive_scan_jitter: float = float(self.cfg.get("PASSIVE_SCAN_JITTER") or 10)  # 减少抖动时间
 
     def start(self) -> None:
         if self._thread and self._thread.is_alive():
             return
         self.stop_event.clear()
-        self.feishu = FeishuClient(
-            app_id=self.cfg.get("FEISHU_APP_ID"),
-            app_secret=self.cfg.get("FEISHU_APP_SECRET"),
-            task_table_url=self.cfg.get("FEISHU_TABLE_URL"),
-            profile_table_url=self.cfg.get("FEISHU_PROFILE_TABLE_URL"),
-        )
+
+        # 显示网络环境信息
+        network_info = network_config.get_network_info()
+        if network_info.get("has_vpn"):
+            logger.info("🌐 检测到VPN/代理环境: {}", network_info)
+        elif network_info.get("system_proxy"):
+            logger.info("🔌 检测到系统代理: {}", network_info["system_proxy"])
+
+        # 测试网络连接
+        logger.info("🔍 测试飞书服务器连接...")
+        if not network_config.test_connection():
+            logger.warning("⚠️ 网络连接测试失败，但继续尝试初始化")
+            logger.warning("   如果持续失败，请检查：")
+            logger.warning("   1. VPN/代理设置是否正确")
+            logger.warning("   2. 网络连接是否正常")
+            logger.warning("   3. 在配置中设置 NETWORK_PROXY 或禁用 SSL 验证")
+
+        # 增强飞书客户端初始化的错误处理
+        try:
+            self.feishu = FeishuClient(
+                app_id=self.cfg.get("FEISHU_APP_ID"),
+                app_secret=self.cfg.get("FEISHU_APP_SECRET"),
+                task_table_url=self.cfg.get("FEISHU_TABLE_URL"),
+                profile_table_url=self.cfg.get("FEISHU_PROFILE_TABLE_URL"),
+            )
+            logger.info("飞书客户端初始化成功")
+        except requests.exceptions.SSLError as ssl_err:
+            logger.error("❌ 飞书客户端初始化失败 - SSL连接错误: {}", ssl_err)
+            logger.error("   建议检查：")
+            logger.error("   1. 网络连接是否正常")
+            logger.error("   2. 防火墙或代理设置")
+            logger.error("   3. 系统时间是否正确")
+            raise RuntimeError("飞书服务连接失败，请检查网络环境后重试")
+        except requests.exceptions.ConnectionError as conn_err:
+            logger.error("❌ 飞书客户端初始化失败 - 网络连接错误: {}", conn_err)
+            raise RuntimeError("无法连接到飞书服务器，请检查网络连接")
+        except Exception as e:
+            logger.error("❌ 飞书客户端初始化失败: {}", e)
+            logger.error("   请检查配置文件中的飞书应用凭据是否正确")
+            raise
         self.wechat = WeChatRPA(exec_path=self.cfg.get("WECHAT_EXEC_PATH", ""))
         self.welcome_enabled = (self.cfg.get("WELCOME_ENABLED") or "0") == "1"
         self.welcome_steps = _load_welcome_steps(self.cfg)
@@ -184,10 +221,15 @@ class TaskEngine:
                 logger.warning("COM 初始化失败，可能影响被动监听：{}", "CoInitialize 调用异常")
 
         try:
+            scan_count = 0
             while not self.stop_event.is_set():
+                scan_count += 1
+                logger.debug("🔍 开始第 {} 次被动扫描 (间隔: {:.1f}s)", scan_count, self.passive_scan_interval)
                 self._handle_passive_new_friends()
+
                 wait_seconds = self.passive_scan_interval + random.uniform(-self.passive_scan_jitter, self.passive_scan_jitter)
-                wait_seconds = max(5.0, wait_seconds)
+                wait_seconds = max(10.0, wait_seconds)  # 最少10秒间隔
+                logger.debug("⏰ 被动监听等待 {:.1f} 秒后进行下次扫描", wait_seconds)
                 self.stop_event.wait(wait_seconds)
         except Exception as exc:  # noqa: BLE001
             if not self.stop_event.is_set():
@@ -284,12 +326,15 @@ class TaskEngine:
         if feishu is None or wechat is None:
             return
 
-        keywords = [kw for kw in self.passive_keywords if kw]
-        if not keywords:
-            keywords = ["已添加你为朋友", "现在可以开始聊天了", "你已添加了"]
+        # 使用微信RPA类中配置化的关键词，不再使用硬编码
+        # keywords = [kw for kw in self.passive_keywords if kw]
+        # if not keywords:
+        #     keywords = ["已添加你为朋友", "现在可以开始聊天了", "你已添加了"]
 
         with self.wechat_lock:
-            contacts = wechat.scan_passive_new_friends(keywords=keywords, max_chats=8)
+            # 使用配置化的参数，不传递参数让它使用类中的默认配置
+            contacts = wechat.scan_passive_new_friends()
+            logger.debug("被动扫描完成，发现 {} 个新好友", len(contacts))
 
         if not contacts:
             return
@@ -305,8 +350,21 @@ class TaskEngine:
             try:
                 feishu.upsert_contact_profile(phone=phone, name=nickname, remark=remark)
                 logger.info("[被动同步] {} -> 已写入飞书手机号字段", phone)
+            except requests.HTTPError as http_err:
+                logger.error("飞书API网络错误 [{}]: {} - 检查网络连接和API配置", phone, http_err)
+                # 网络错误暂时跳过，下次轮询可能恢复
+                continue
+            except RuntimeError as api_err:
+                logger.error("飞书API业务错误 [{}]: {} - 检查数据格式和权限", phone, api_err)
+                # API错误可能是数据问题，继续处理下一个
+                continue
+            except ValueError as data_err:
+                logger.warning("数据验证失败 [{}]: {} - 微信号可能无效", phone, data_err)
+                # 数据错误跳过该联系人
+                continue
             except Exception as exc:  # noqa: BLE001
-                logger.warning("同步飞书失败 [{}]: {}", phone, exc)
+                logger.error("未知错误 [{}]: {} - 建议检查系统状态", phone, exc)
+                # 未知错误记录但继续处理
                 continue
 
             if self.welcome_enabled and self.welcome_steps:

@@ -105,9 +105,40 @@ class ConsoleApp:
         self.root.protocol("WM_DELETE_WINDOW", self.stop)
 
     def run(self) -> None:
-        self.engine.start()
-        self._poll_log_queue()
-        self.root.mainloop()
+        try:
+            self.engine.start()
+            self._poll_log_queue()
+            self.root.mainloop()
+        except RuntimeError as e:
+            # 捕获初始化阶段的运行时错误
+            error_msg = str(e)
+            if "飞书" in error_msg or "网络" in error_msg or "SSL" in error_msg:
+                self._show_critical_error("服务连接错误", error_msg)
+            else:
+                self._show_critical_error("程序启动错误", error_msg)
+        except Exception as e:
+            self._show_critical_error("未知错误", f"程序启动时发生未知错误：{e}")
+
+    def _show_critical_error(self, title: str, message: str) -> None:
+        """显示严重错误对话框并退出程序"""
+        try:
+            import tkinter.messagebox as messagebox
+
+            # 确保root窗口存在
+            if not hasattr(self, 'root') or not self.root:
+                temp_root = tkinter.Tk()
+                temp_root.withdraw()  # 隐藏主窗口
+                messagebox.showerror(title, message)
+                temp_root.destroy()
+            else:
+                messagebox.showerror(title, message)
+        except Exception:
+            # 如果连错误对话框都无法显示，输出到控制台
+            print(f"严重错误 [{title}]: {message}")
+
+        # 退出程序
+        import sys
+        sys.exit(1)
 
     def stop(self) -> None:
         if self.stop_btn:
