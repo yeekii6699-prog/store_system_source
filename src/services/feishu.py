@@ -327,24 +327,58 @@ class FeishuClient:
         return self.fetch_tasks_by_status(["待添加"])
 
     def fetch_tasks_by_status(self, statuses: List[str]) -> List[Dict[str, Any]]:
+        """按状态拉取任务，支持单选字段多状态查询（多次查询合并结果）。"""
         values = [status for status in statuses if status]
         if not values:
             return []
-        payload = {
-            "filter": {
-                "conditions": [
-                    {
-                        "field_name": "微信绑定状态",
-                        "operator": "is",
-                        "value": values,
-                    }
-                ],
-                "conjunction": "and",
+
+        # 如果只有一个状态，直接查询
+        if len(values) == 1:
+            payload = {
+                "filter": {
+                    "conditions": [
+                        {
+                            "field_name": "微信绑定状态",
+                            "operator": "is",
+                            "value": values,
+                        }
+                    ],
+                    "conjunction": "and",
+                }
             }
-        }
-        logger.debug("按状态拉取任务，payload={}", payload)
-        data = self._request("POST", self.profile_table_url + "/search", json=payload)
-        return data.get("data", {}).get("items", [])
+            logger.debug("按状态拉取任务，payload={}", payload)
+            data = self._request("POST", self.profile_table_url + "/search", json=payload)
+            return data.get("data", {}).get("items", [])
+
+        # 多个状态：分别查询后合并（飞书单选字段不支持一次查多个值）
+        all_items: List[Dict[str, Any]] = []
+        seen_ids: set = set()
+        for status in values:
+            payload = {
+                "filter": {
+                    "conditions": [
+                        {
+                            "field_name": "微信绑定状态",
+                            "operator": "is",
+                            "value": [status],
+                        }
+                    ],
+                    "conjunction": "and",
+                }
+            }
+            logger.debug("按状态拉取任务 [{}]，payload={}", status, payload)
+            try:
+                data = self._request("POST", self.profile_table_url + "/search", json=payload)
+                items = data.get("data", {}).get("items", [])
+                for item in items:
+                    record_id = self._extract_record_id(item)
+                    if record_id and record_id not in seen_ids:
+                        seen_ids.add(record_id)
+                        all_items.append(item)
+            except Exception as e:
+                logger.warning("查询状态 [{}] 失败: {}", status, e)
+                continue
+        return all_items
 
     def mark_processed(self, record_id: str) -> None:
         """
@@ -395,10 +429,19 @@ class FeishuClient:
         record = items[0]
         return self._extract_record_id(record)
 
-    def upsert_contact_profile(self, phone: str, name: str | None = None, remark: str | None = None) -> str:
+    def upsert_contact_profile(self, phone: str, name: str | None = None, remark: str | None = None, status: str | None = None) -> str:
         """
-        将微信号写入“手机号”字段，若已存在则更新姓名/备注，否则创建记录。
-        返回记录 ID（存在或新建）。
+        将微信号写入"手机号"字段，若已存在则更新姓名/备注，否则创建记录。
+        若指定 status，则同时更新"微信绑定状态"字段。
+
+        Args:
+            phone: 微信号（存入手机号字段）
+            name: 昵称（存入姓名字段）
+            remark: 备注（存入微信备注字段）
+            status: 状态值（如"已绑定"），用于直接设置微信绑定状态
+
+        Returns:
+            record_id: 记录 ID（存在或新建）
         """
         phone = (phone or "").strip()
         if not phone:
@@ -409,6 +452,8 @@ class FeishuClient:
             fields[self.profile_field_name] = name
         if remark:
             fields[self.profile_field_remark] = remark
+        if status:
+            fields["微信绑定状态"] = status
 
         record_id = self._find_profile_by_phone(phone)
         if record_id:

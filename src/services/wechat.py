@@ -12,6 +12,7 @@ from __future__ import annotations
 import time
 import struct
 import ctypes
+import re
 from pathlib import Path
 from typing import Optional, Sequence, Literal, List, Dict, TypedDict
 
@@ -71,6 +72,7 @@ class WeChatRPA:
         # 解析关键词列表，支持逗号分隔；始终包含系统常见提示，防止配置缺失
         default_keywords = [
             "已添加你为朋友",
+            "你已添加了",
             "你现在可以给 ta 发送消息",
             "打招呼消息",
             "你们现在是好友了",
@@ -244,19 +246,48 @@ class WeChatRPA:
         if _has_not_found_message():
             return None
 
-        search_list = main.ListControl(AutomationId='search_list')
-        clicked = False
-        if search_list.Exists(0.5):
-            target = search_list.ListItemControl(SubName="网络查找")
-            if target.Exists(0):
-                target.Click()
+        # 先点击"网络查找"选项（搜索框下方的第一个ListItemControl）
+        network_find = main.ListItemControl(SubName="网络查找", searchDepth=15)
+        if network_find.Exists(0.5):
+            logger.debug("点击网络查找选项")
+            network_find.Click()
+            clicked = True
+        else:
+            # 兜底：尝试 SubName 包含"网络查找"的项
+            network_find_v2 = main.ListItemControl(RegexName="网络查找.*", searchDepth=15)
+            if network_find_v2.Exists(0.5):
+                logger.debug("点击网络查找选项(v2)")
+                network_find_v2.Click()
                 clicked = True
-            else:
-                first = search_list.ListItemControl(foundIndex=1)
-                if first.Exists(0):
-                    first.Click()
+
+        if not clicked:
+            # 如果找不到网络查找选项，再尝试在search_list中查找
+            search_list = main.ListControl(AutomationId='search_list')
+            if search_list.Exists(0.5):
+                target = search_list.ListItemControl(AutomationId=f'search_item_{keyword}')
+                if target.Exists(0):
+                    logger.debug("点击精确匹配的搜索结果: {}", keyword)
+                    target.Click()
                     clicked = True
-        
+                else:
+                    # 遍历搜索结果
+                    all_items = search_list.GetChildren()
+                    for item in all_items:
+                        try:
+                            item_name = item.Name or ""
+                            item_aid = getattr(item, "AutomationId", "") or ""
+                            if item_name in ("最常使用", "最近聊天", "群聊"):
+                                continue
+                            if item_aid and not item_aid.startswith("search_item_"):
+                                continue
+                            logger.debug("点击搜索结果项: name={}, aid={}", item_name, item_aid)
+                            item.Click()
+                            clicked = True
+                            break
+                        except Exception as item_err:
+                            logger.debug("处理搜索项失败: {}", item_err)
+                            continue
+
         if not clicked:
             _send_keys("{Enter}")
             
@@ -421,71 +452,94 @@ class WeChatRPA:
                 logger.error(f"发送步骤 {i+1} 失败: {e}")
         return True
 
-    def _chat_has_keywords(self, main_win: auto.WindowControl, keywords: Sequence[str]) -> bool:
-        """检测当前会话的聊天内容是否包含特定关键词。"""
-        logger.debug("🔍 在聊天内容中检查关键词: {}", keywords)
+    def _get_all_chat_messages(self, main_win: auto.WindowControl) -> List[str]:
+        """获取当前聊天窗口中所有可见的消息文本（整页内容）。"""
+        messages: List[str] = []
 
-        # 等待聊天界面加载
-        time.sleep(0.5)
+        # 等待聊天内容加载
+        time.sleep(0.3)
 
-        # 查找聊天内容区域
         try:
-            # 聊天内容通常在右侧区域
             chat_content = self._find_chat_content_area(main_win)
             if not chat_content:
-                logger.debug("未找到聊天内容区域，尝试窗口全局匹配")
-                # 兜底：直接在窗口内搜索 TextControl
-                for kw in keywords:
-                    if not kw:
-                        continue
-                    text_ctrl = main_win.TextControl(SubName=kw, searchDepth=18)
-                    if text_ctrl.Exists(0.3):
-                        logger.info("✅ 全局匹配到关键词 {}", kw)
-                        return True
-                return False
+                # 兜底：直接从窗口获取所有TextControl
+                all_texts = self._collect_all_text_from_control(main_win, max_depth=15)
+                return all_texts
 
-            logger.debug("找到聊天内容区域，开始搜索关键词...")
-
-            # 在聊天内容区域搜索关键词
-            for kw in keywords:
-                if not kw:
-                    continue
-
-                logger.debug("🔍 在聊天内容中搜索关键词: {}", kw)
-
-                # 精确匹配
-                text_control = chat_content.TextControl(SubName=kw, searchDepth=10)
-                if text_control.Exists(0.3):
-                    try:
-                        full_text = text_control.Name
-                        logger.info("✅ 在聊天内容中找到关键词: {}", kw)
-                        logger.debug("完整文本: {}", full_text)
-                        return True
-                    except Exception:
-                        logger.info("✅ 在聊天内容中找到关键词: {}", kw)
-                        return True
-
-            # 模糊匹配，搜索系统消息相关内容
-            system_keywords = ["已添加", "打招呼", "朋友", "添加你", "现在可以", "以上是打招呼的消息", "以上是打招呼的内容"]
-            logger.debug("🔍 尝试模糊匹配系统消息关键词: {}", system_keywords)
-
-            for kw in system_keywords:
-                text_control = chat_content.TextControl(SubName=kw, searchDepth=12)
-                if text_control.Exists(0.2):
-                    try:
-                        full_text = text_control.Name
-                        logger.debug("模糊匹配到文本: {}", full_text)
-                        # 检查是否包含完整的系统消息模式
-                        if any(word in full_text for word in ["朋友", "添加", "打招呼", "消息"]):
-                            logger.info("✅ 在聊天内容中模糊匹配到系统消息: {}", full_text)
-                            return True
-                    except Exception as e:
-                        logger.debug("获取模糊匹配文本失败: {}", e)
+            # 收集聊天内容区域中的所有文本
+            all_texts = self._collect_all_text_from_control(chat_content, max_depth=20)
+            return all_texts
 
         except Exception as e:
-            logger.debug("聊天内容关键词搜索失败: {}", e)
+            logger.debug("获取聊天消息失败: {}", e)
+            return messages
 
-        logger.debug("❌ 聊天内容中未匹配到任何关键词")
+    def _collect_all_text_from_control(self, control: auto.Control, max_depth: int = 20, current_depth: int = 0) -> List[str]:
+        """递归收集控件中的所有文本内容。"""
+        texts: List[str] = []
+
+        if current_depth >= max_depth:
+            return texts
+
+        try:
+            # 获取当前控件的文本
+            name = getattr(control, "Name", "") or ""
+            if name and isinstance(name, str) and name.strip():
+                texts.append(name.strip())
+
+            # 递归获取子控件的文本
+            if hasattr(control, 'GetChildren'):
+                children = control.GetChildren()
+                for child in children:
+                    child_texts = self._collect_all_text_from_control(child, max_depth, current_depth + 1)
+                    texts.extend(child_texts)
+        except Exception:
+            pass
+
+        return texts
+
+    def _chat_has_keywords(self, main_win: auto.WindowControl, keywords: Sequence[str]) -> bool:
+        """检测当前会话的聊天内容（整页）是否包含特定关键词。"""
+        logger.debug("🔍 检查聊天页面内容，关键词: {}", keywords)
+
+        # 获取当前页面所有消息
+        all_messages = self._get_all_chat_messages(main_win)
+
+        if not all_messages:
+            logger.debug("未获取到任何聊天消息")
+            return False
+
+        # 合并所有消息文本用于搜索
+        combined_text = "\n".join(all_messages)
+        logger.debug("获取到 {} 条消息文本，总长度: {}", len(all_messages), len(combined_text))
+
+        # 搜索关键词（精确匹配）
+        for kw in keywords:
+            if not kw:
+                continue
+            if kw in combined_text:
+                logger.info("✅ 在整页消息中找到关键词 [{}]", kw)
+                logger.debug("匹配上下文: ...{}...", combined_text[max(0, combined_text.find(kw)-20):combined_text.find(kw)+len(kw)+20])
+                return True
+
+        # 模糊匹配系统消息 - 必须匹配完整的系统消息模式，避免群聊误匹配
+        system_patterns = [
+            # 必须以这些开头才是系统消息
+            "已添加你为朋友",
+            "你已添加了",
+            "你现在可以给 ta 发送消息",
+            "你们现在是好友了",
+            "刚刚把你添加到通讯录",
+            "现在可以开始聊天了",
+            "以上是打招呼的消息",
+            "以上是打招呼的内容",
+        ]
+        for pattern in system_patterns:
+            if pattern in combined_text:
+                logger.info("✅ 在整页消息中模糊匹配到系统消息 [{}]", pattern)
+                return True
+
+        logger.debug("❌ 整页消息中未匹配到任何关键词")
         return False
 
     def _find_chat_content_area(self, main_win: auto.WindowControl) -> Optional[auto.Control]:
@@ -605,7 +659,10 @@ class WeChatRPA:
         except Exception:
             pass
 
-    def _open_profile_from_chat(self, main_win: auto.WindowControl) -> Optional[auto.WindowControl]:
+    def _open_profile_from_chat(
+        self,
+        main_win: auto.WindowControl,
+    ) -> Optional[tuple[auto.Control, Optional[tuple[int, int, int, int]]]]:
         """
         打开资料卡（侧栏固定路径版）：
         1) 点击右上角“聊天信息/更多”按钮
@@ -638,29 +695,133 @@ class WeChatRPA:
         # 2) 等侧栏展开
         time.sleep(0.8)
 
-        # 3) 固定坐标点击侧栏首个头像
-        # 根据实际测量点 (1715, 244) 计算的相对偏移：距离窗口右侧约 205px，距离顶部约 190px
-        target_x = win_rect.right - 205
-        target_y = win_rect.top + 140
-        try:
-            auto.Click(target_x, target_y)
-            logger.debug("侧栏头像固定坐标点击: ({}, {})", target_x, target_y)
-        except Exception as exc:
-            logger.debug("点击侧栏头像失败: {}", exc)
+        # 3) 尝试点击侧栏头像（避免点到右侧“+”）
+        def _find_profile_popup() -> Optional[auto.WindowControl]:
+            popup = auto.WindowControl(ClassName="mmui::ProfileUniquePop", searchDepth=2)
+            if popup.Exists(0):
+                try:
+                    popup.SetFocus()
+                except Exception:
+                    pass
+                return popup
             return None
 
-        # 4) 等资料卡窗口弹出
-        end_time = time.time() + 3
-        while time.time() < end_time:
-            for title in self.PROFILE_TITLES:
-                win = auto.WindowControl(Name=title, searchDepth=1)
-                if win.Exists(0):
+        def _wait_profile_window(timeout: float) -> Optional[auto.WindowControl]:
+            end_time = time.time() + timeout
+            while time.time() < end_time:
+                popup = _find_profile_popup()
+                if popup:
+                    logger.debug("弹窗资料卡已打开")
+                    return popup
+                for title in self.PROFILE_TITLES:
+                    win = auto.WindowControl(Name=title, searchDepth=1)
+                    if win.Exists(0):
+                        try:
+                            win.SetFocus()
+                        except Exception:
+                            pass
+                        return win
+                time.sleep(0.2)
+            return None
+
+        def _find_sidebar_panel_rect() -> Optional[tuple[int, int, int, int]]:
+            """基于几何特征判断侧栏资料面板是否已展开，返回矩形区域。"""
+            right_boundary = win_rect.left + int(win_rect.width() * 0.55)
+            min_w = int(win_rect.width() * 0.2)
+            max_w = int(win_rect.width() * 0.7)
+            min_h = int(win_rect.height() * 0.4)
+
+            best_rect = None
+            best_area = 0
+            try:
+                controls = main_win.GetDescendants()
+            except Exception:
+                return None
+
+            for ctrl in controls:
+                try:
+                    rect = ctrl.BoundingRectangle
+                    if rect.right <= right_boundary:
+                        continue
+                    width = rect.width()
+                    height = rect.height()
+                    if width < min_w or width > max_w or height < min_h:
+                        continue
+                    area = width * height
+                    if area > best_area:
+                        best_area = area
+                        best_rect = rect
+                except Exception:
+                    continue
+
+            if best_rect:
+                return (best_rect.left, best_rect.top, best_rect.right, best_rect.bottom)
+            return None
+
+        def _rect_intersects(ctrl: auto.Control, rect: tuple[int, int, int, int]) -> bool:
+            try:
+                c_rect = ctrl.BoundingRectangle
+            except Exception:
+                return False
+            left, top, right, bottom = rect
+            if c_rect.right <= left or c_rect.left >= right:
+                return False
+            if c_rect.bottom <= top or c_rect.top >= bottom:
+                return False
+            return True
+
+        def _log_sidebar_texts(rect: tuple[int, int, int, int]) -> None:
+            texts: list[str] = []
+            try:
+                for ctrl in main_win.GetDescendants():
                     try:
-                        win.SetFocus()
+                        if not _rect_intersects(ctrl, rect):
+                            continue
+                        name = str(getattr(ctrl, "Name", "") or "").strip()
+                        if name:
+                            texts.append(name)
+                            if len(texts) >= 20:
+                                break
                     except Exception:
-                        pass
-                    return win
-            time.sleep(0.2)
+                        continue
+            except Exception:
+                return
+            if texts:
+                logger.debug("侧栏文本预览: {}", texts)
+
+        def _wait_sidebar_profile(timeout: float) -> Optional[tuple[int, int, int, int]]:
+            end_time = time.time() + timeout
+            while time.time() < end_time:
+                sidebar_rect = _find_sidebar_panel_rect()
+                if sidebar_rect:
+                    logger.debug("侧栏面板识别成功: {}", sidebar_rect)
+                    _log_sidebar_texts(sidebar_rect)
+                    return sidebar_rect
+                time.sleep(0.2)
+            return None
+
+        target_y = win_rect.top + 140
+        # 偏移越大越靠左，优先试更靠左的位置
+        avatar_offsets = (260, 230, 205)
+        for offset in avatar_offsets:
+            target_x = win_rect.right - offset
+            try:
+                auto.Click(target_x, target_y)
+                logger.debug("侧栏头像尝试坐标点击: ({}, {})", target_x, target_y)
+            except Exception as exc:
+                logger.debug("点击侧栏头像失败: {}", exc)
+                continue
+
+            profile_win = _wait_profile_window(timeout=1.6)
+            if profile_win:
+                return (profile_win, None)
+
+            sidebar_rect = _wait_sidebar_profile(timeout=1.0)
+            if sidebar_rect:
+                logger.debug("侧栏资料已展开，使用主窗口继续提取")
+                return (main_win, sidebar_rect)
+
+        # 4) 所有坐标尝试后仍未找到资料卡
         return None
 
     def _click_avatar_if_possible(self, profile_win: auto.WindowControl) -> None:
@@ -733,20 +894,177 @@ class WeChatRPA:
 
         return {"wechat_id": first, "nickname": candidate, "remark": None}
 
-    def _extract_profile_info(self, profile_win: auto.WindowControl) -> Optional[ContactProfile]:
+    def _extract_profile_info(
+        self,
+        profile_win: auto.Control,
+        sidebar_rect: Optional[tuple[int, int, int, int]] = None,
+    ) -> Optional[ContactProfile]:
         """从资料卡提取微信号/昵称/备注。使用更灵活的提取逻辑。"""
         wechat_id: Optional[str] = None
         nickname: Optional[str] = None
         remark: Optional[str] = None
+        profile_class = str(getattr(profile_win, "ClassName", "") or "")
+
+        def _extract_wechat_from_popup() -> Optional[str]:
+            """从 ProfileUniquePop 弹窗中提取微信号。"""
+            label_id = "right_v_view.user_info_center_view.basic_line_view.basic_line.key_text"
+            value_id = "right_v_view.user_info_center_view.basic_line_view.ContactProfileTextView"
+
+            descendants: list[auto.Control] = []
+            try:
+                descendants = profile_win.GetDescendants()
+            except Exception:
+                descendants = []
+
+            deadline = time.time() + 2.0
+            while time.time() < deadline:
+                try:
+                    value_ctrl = profile_win.TextControl(AutomationId=value_id, searchDepth=40)
+                    if value_ctrl.Exists(0.2):
+                        value = (value_ctrl.Name or "").strip()
+                        if value and "微信号" not in value:
+                            return value
+                except Exception as exc:
+                    logger.debug("弹窗读取微信号控件失败: {}", exc)
+                try:
+                    label_ctrl = profile_win.TextControl(AutomationId=label_id, searchDepth=40)
+                    if label_ctrl.Exists(0.2):
+                        label_name = (label_ctrl.Name or "").strip()
+                        if "微信号" in label_name:
+                            value = _match_value_from_parent(label_ctrl)
+                            if value:
+                                return value
+                except Exception:
+                    pass
+                time.sleep(0.2)
+
+            for ctrl in descendants:
+                try:
+                    aid = str(getattr(ctrl, "AutomationId", "") or "")
+                    name = str(getattr(ctrl, "Name", "") or "").strip()
+                    if value_id in aid and name and "微信号" not in name:
+                        return name
+                    if "ContactProfileTextView" in aid and name and "微信号" not in name:
+                        return name
+                except Exception:
+                    continue
+
+            def _match_value_from_parent(label_ctrl: auto.Control) -> Optional[str]:
+                parent = None
+                try:
+                    parent = label_ctrl.GetParentControl()
+                except Exception:
+                    parent = None
+                for _ in range(3):
+                    if not parent:
+                        break
+                    try:
+                        for child in parent.GetChildren():
+                            try:
+                                aid = str(getattr(child, "AutomationId", "") or "")
+                                cls = str(getattr(child, "ClassName", "") or "")
+                                name = str(getattr(child, "Name", "") or "").strip()
+                                if not name or "微信号" in name:
+                                    continue
+                                if "ContactProfileTextView" in aid or "ContactProfileTextView" in cls:
+                                    return name
+                            except Exception:
+                                continue
+                    except Exception:
+                        pass
+                    try:
+                        parent = parent.GetParentControl()
+                    except Exception:
+                        parent = None
+                return None
+
+            def _match_value_by_rect(label_ctrl: auto.Control) -> Optional[str]:
+                try:
+                    label_rect = label_ctrl.BoundingRectangle
+                except Exception:
+                    return None
+                best = None
+                for ctrl in descendants:
+                    try:
+                        if ctrl.ControlTypeName != "TextControl":
+                            continue
+                        name = str(getattr(ctrl, "Name", "") or "").strip()
+                        if not name or "微信号" in name:
+                            continue
+                        rect = ctrl.BoundingRectangle
+                        if rect.top > label_rect.bottom or rect.bottom < label_rect.top:
+                            continue
+                        if rect.left <= label_rect.right:
+                            continue
+                        if best is None or rect.left < best[0]:
+                            best = (rect.left, name)
+                    except Exception:
+                        continue
+                return best[1] if best else None
+
+            for ctrl in descendants:
+                try:
+                    aid = str(getattr(ctrl, "AutomationId", "") or "")
+                    name = str(getattr(ctrl, "Name", "") or "").strip()
+                    if label_id in aid and "微信号" in name:
+                        value = _match_value_from_parent(ctrl) or _match_value_by_rect(ctrl)
+                        if value:
+                            return value
+                except Exception:
+                    continue
+            return None
+
+        if not wechat_id and profile_class == "mmui::ProfileUniquePop":
+            wechat_id = _extract_wechat_from_popup()
+            if wechat_id:
+                logger.debug("通过弹窗控件提取微信号: {}", wechat_id)
+
+        def _rect_intersects(ctrl: auto.Control) -> bool:
+            if sidebar_rect is None:
+                return True
+            try:
+                rect = ctrl.BoundingRectangle
+            except Exception:
+                return False
+            left, top, right, bottom = sidebar_rect
+            if rect.right <= left or rect.left >= right:
+                return False
+            if rect.bottom <= top or rect.top >= bottom:
+                return False
+            return True
+
+        def _looks_like_wechat_id(value: str) -> bool:
+            value = value.strip()
+            if not value or len(value) < 6 or len(value) > 20:
+                return False
+            if value.lower().startswith("wxid_"):
+                return True
+            if not value[0].isalpha():
+                return False
+            return bool(re.fullmatch(r"[A-Za-z0-9_.-]+", value))
+
+        def _iter_text_controls() -> list[auto.Control]:
+            try:
+                controls = profile_win.GetDescendants()
+            except Exception:
+                return []
+            if sidebar_rect is None:
+                return controls
+            filtered: list[auto.Control] = []
+            for ctrl in controls:
+                if _rect_intersects(ctrl):
+                    filtered.append(ctrl)
+            return filtered
 
         # 提取昵称 - 使用多种方法寻找昵称控件
         try:
-            # 方法1：尝试查找主要的昵称控件
-            name_ctrl = profile_win.TextControl(foundIndex=1, searchDepth=6)
-            if name_ctrl.Exists(0):
-                nickname = (name_ctrl.Name or "").strip()
-                if nickname and len(nickname) > 1:
-                    logger.debug("通过方法1提取到昵称: {}", nickname)
+            if sidebar_rect is None:
+                # 方法1：尝试查找主要的昵称控件
+                name_ctrl = profile_win.TextControl(foundIndex=1, searchDepth=6)
+                if name_ctrl.Exists(0):
+                    nickname = (name_ctrl.Name or "").strip()
+                    if nickname and len(nickname) > 1:
+                        logger.debug("通过方法1提取到昵称: {}", nickname)
         except Exception:
             pass
 
@@ -754,12 +1072,17 @@ class WeChatRPA:
         if not nickname or len(nickname) <= 1:
             try:
                 # 方法2：查找包含中文特征的名字控件
-                text_controls = profile_win.GetChildren()
-                for i, ctrl in enumerate(text_controls[:5]):  # 只检查前5个子控件
+                text_controls = _iter_text_controls()
+                for ctrl in text_controls[:20]:
                     try:
                         text = getattr(ctrl, "Name", "")
-                        if text and any('\u4e00' <= char <= '\u9fff' for char in str(text)) and "微信" not in str(text):
-                            nickname = str(text).strip()
+                        if not text:
+                            continue
+                        text_str = str(text)
+                        if "微信号" in text_str or "备注" in text_str:
+                            continue
+                        if any('\u4e00' <= char <= '\u9fff' for char in text_str) and "微信" not in text_str:
+                            nickname = text_str.strip()
                             if len(nickname) > 1:
                                 logger.debug("通过方法2提取到昵称: {}", nickname)
                                 break
@@ -779,7 +1102,28 @@ class WeChatRPA:
 
         try:
             # 获取所有文本控件进行遍历
-            all_text_controls = profile_win.GetDescendants()
+            all_text_controls = _iter_text_controls()
+            label_hints = tuple(field_mappings.keys())
+
+            def _find_value_next_to_label(label_rect, start_index: int) -> Optional[str]:
+                lookahead_limit = min(start_index + 6, len(all_text_controls))
+                for next_idx in range(start_index + 1, lookahead_limit):
+                    next_ctrl = all_text_controls[next_idx]
+                    try:
+                        next_text = str(getattr(next_ctrl, "Name", "") or "").strip()
+                        if not next_text or next_text in label_hints:
+                            continue
+                        next_rect = next_ctrl.BoundingRectangle
+                        if label_rect and next_rect:
+                            if next_rect.left <= label_rect.right - 5:
+                                continue
+                            if next_rect.top > label_rect.bottom or next_rect.bottom < label_rect.top:
+                                continue
+                        return next_text
+                    except Exception:
+                        continue
+                return None
+
             for idx, ctrl in enumerate(all_text_controls):
                 try:
                     raw_text = getattr(ctrl, "Name", "") or ""
@@ -804,12 +1148,13 @@ class WeChatRPA:
                             parts = text.split(":", 1)
                             if len(parts) == 2 and parts[1].strip():
                                 value = parts[1].strip()
-                            # 如果当前控件是标签，没有值，尝试读取下一个文本控件作为值
-                            if not value and idx + 1 < len(all_text_controls):
-                                next_ctrl = all_text_controls[idx + 1]
-                                next_text = str(getattr(next_ctrl, "Name", "") or "").strip()
-                                if next_text:
-                                    value = next_text
+                            # 如果当前控件是标签，没有值，尝试读取右侧文本作为值
+                            if not value:
+                                try:
+                                    label_rect = ctrl.BoundingRectangle
+                                except Exception:
+                                    label_rect = None
+                                value = _find_value_next_to_label(label_rect, idx)
 
                             if value:
                                 if target_field == "wechat_id" and not wechat_id:
@@ -823,6 +1168,9 @@ class WeChatRPA:
                                     logger.debug("提取到昵称: {}", value)
                             break
 
+                    if not wechat_id and _looks_like_wechat_id(text):
+                        wechat_id = text
+                        logger.debug("通过规则匹配提取微信号: {}", text)
                 except Exception:
                     continue
         except Exception:
@@ -913,9 +1261,9 @@ class WeChatRPA:
             logger.error("   建议运行微信UI分析工具进行诊断")
             return results
 
-        # 缓存子项列表避免重复获取
-        cached_items = items[:max_chats]
-        logger.debug("开始被动扫描 {} 个会话，关键词: {}", len(cached_items), keywords)
+        # 缓存子项列表避免重复获取（从顶部数前6个，从下到上扫描）
+        cached_items = list(reversed(items[:max_chats]))
+        logger.debug("开始被动扫描 {} 个会话（从下到上），关键词: {}", len(cached_items), keywords)
 
         for idx, item in enumerate(cached_items, start=1):
             try:
@@ -952,8 +1300,8 @@ class WeChatRPA:
             else:
                 logger.info("✅ 会话 {} 匹配到关键词，准备提取资料", idx)
 
-            profile_win = self._open_profile_from_chat(main)
-            if not profile_win:
+            profile_result = self._open_profile_from_chat(main)
+            if not profile_result:
                 logger.debug("未能打开资料卡，尝试兜底使用聊天标题/列表名称 idx={}", idx)
                 fallback_profile = self._fallback_profile_from_header(main, item_name)
                 if fallback_profile:
@@ -964,14 +1312,19 @@ class WeChatRPA:
                         logger.info("⚠️ 资料卡未打开，使用兜底标识记录好友: {}", fallback_profile)
                 continue
 
+            profile_win, sidebar_rect = profile_result
             try:
                 # 尝试点击头像以进入更详细资料页
                 try:
-                    self._click_avatar_if_possible(profile_win)
+                    profile_class = str(getattr(profile_win, "ClassName", "") or "")
+                    if sidebar_rect is None and profile_class != "mmui::ProfileUniquePop":
+                        self._click_avatar_if_possible(profile_win)
+                    else:
+                        logger.debug("资料卡已在弹窗/侧栏展开，跳过头像二次点击")
                 except Exception as avatar_exc:
                     logger.debug("点击头像进入详细资料失败: {}", avatar_exc)
 
-                profile = self._extract_profile_info(profile_win)
+                profile = self._extract_profile_info(profile_win, sidebar_rect=sidebar_rect)
                 if profile:
                     # 创建去重标识符（微信号 + 昵称的组合）
                     wechat_id = profile.get("wechat_id", "")
@@ -987,7 +1340,9 @@ class WeChatRPA:
                         logger.debug("跳过重复处理的好友: {}", profile)
             finally:
                 try:
-                    profile_win.SendKeys("{Esc}")
+                    profile_class = str(getattr(profile_win, "ClassName", "") or "")
+                    if sidebar_rect is None and profile_class != "mmui::ProfileUniquePop":
+                        profile_win.SendKeys("{Esc}")
                 except Exception:
                     pass
             time.sleep(0.5)
@@ -1095,82 +1450,43 @@ class WeChatRPA:
         for i, path_func in enumerate(search_paths, 1):
             try:
                 control = path_func()
-                if control and control.Exists(1):
-                    # 验证控件是否有合理的子项（表示这是会话列表）
-                    try:
-                        children = control.GetChildren()
-                        if len(children) > 1 and len(children) < 100:  # 合理的会话数量
-                            is_session_like = _looks_like_session_list(children)
+                if not control or not control.Exists(1):
+                    continue
+                # 验证控件是否有合理的子项（表示这是会话列表）
+                try:
+                    children = control.GetChildren()
+                    if len(children) <= 1 or len(children) >= 100:
+                        continue
 
-                            # 显示控件信息用于调试
-                            rect = control.BoundingRectangle
-                            control_name = control.Name or "(无名称)"
+                    is_session_like = _looks_like_session_list(children)
+                    rect = control.BoundingRectangle
+                    control_name = control.Name or "(无名称)"
+                    if control_name == "消息":
+                        continue
 
-                            logger.info("🔍 路径{}找到控件: {} ({}个子项) 名称: {}",
-                                      i, control.ControlTypeName, len(children), control_name)
+                    window_rect = main_window.BoundingRectangle
+                    window_left_40pct = window_rect.left + int(window_rect.width() * 0.40)
+                    is_left_side = rect.left < window_left_40pct
 
-                            # 检查是否是正确的会话列表（名称应该是"会话"或在左侧）
-                            is_left_side = False
-                            window_rect = main_window.BoundingRectangle
-                            # 放宽区域：用窗口左侧 40% 作为“左侧区域”判断，避免误杀（宽度 920 的窗口左侧 1/3≈30%）
-                            window_left_40pct = window_rect.left + int(window_rect.width() * 0.40)
+                    if is_session_like or is_left_side or control_name == "会话":
+                        logger.info(
+                            "✅ 路径{}命中会话列表: {} ({}个子项) 名称: {}",
+                            i,
+                            control.ControlTypeName,
+                            len(children),
+                            control_name,
+                        )
+                        return control
 
-                            logger.info("窗口边界: 左={}, 宽={}, 左侧40%分界线={}",
-                                       window_rect.left, window_rect.width(), window_left_40pct)
-                            logger.info("控件边界: 左={}, 宽={}", rect.left, rect.width())
-
-                            if rect.left < window_left_40pct:
-                                is_left_side = True
-                                logger.info("✅ 控件在左侧区域 ({} < {})", rect.left, window_left_40pct)
-                            else:
-                                logger.info("ℹ️ 控件在右侧区域 ({} >= {})", rect.left, window_left_40pct)
-
-                            # 如果控件名称是"消息"，肯定不是会话列表
-                            if control_name == "消息":
-                                logger.info("❌ 控件名称是'消息'，这是聊天窗口，不是会话列表")
-                                continue  # 跳过这个路径，尝试下一个
-
-                            # 如果子项 AutomationId 命中 session_item_*，直接判定为会话列表
-                            if is_session_like:
-                                logger.info("✅ 路径{}匹配到 session_item_* 子项，判定为会话列表", i)
-                                return control
-
-                            # 如果在左侧或名称是"会话"，则是正确的会话列表
-                            if is_left_side or control_name == "会话":
-                                logger.info("✅ 路径{}成功找到正确的会话列表: {} ({}个子项)",
-                                          i, control.ControlTypeName, len(children))
-
-                                logger.info("🔍 会话列表详细信息:")
-                                logger.info("   类型: {}", control.ControlTypeName)
-                                logger.info("   名称: {}", control_name)
-                                logger.info("   位置: ({},{}) 大小: {}x{}",
-                                           rect.left, rect.top, rect.width(), rect.height())
-                                logger.info("   子项数: {}", len(children))
-
-                                # 显示前3个子项的信息
-                                for j, child in enumerate(children[:3], 1):
-                                    child_rect = child.BoundingRectangle
-                                    child_name = child.Name or "(无名称)"
-                                    logger.info("   子项{}: {} - {} 位置({},{})",
-                                               j, child.ControlTypeName, child_name[:20],
-                                               child_rect.left, child_rect.top)
-
-                                return control
-                            # 记录一个候选，作为兜底（左侧判断失败但结构合理）
-                            if fallback_control is None:
-                                fallback_control = control
-                                fallback_info["rect"] = rect
-                                fallback_info["children"] = len(children)
-                            else:
-                                logger.info("❌ 路径{}不是会话列表，继续尝试", i)
-                        else:
-                            logger.info("❌ 路径{}控件子项数量不合理: {}", i, len(children))
-                    except Exception as e:
-                        logger.info("❌ 路径{}控件验证失败: {}", i, e)
-                else:
-                    logger.info("❌ 路径{}未找到控件", i)
-            except Exception as e:
-                logger.info("❌ 路径{}搜索失败: {}", i, e)
+                    # 记录一个候选，作为兜底（左侧判断失败但结构合理）
+                    if fallback_control is None:
+                        fallback_control = control
+                        fallback_info["rect"] = rect
+                        fallback_info["children"] = len(children)
+                except Exception:
+                    continue
+            except Exception:
+                continue
 
         # 如果没命中严格条件，但找到过候选，就返回第一个候选，避免空结果
         if fallback_control is not None:

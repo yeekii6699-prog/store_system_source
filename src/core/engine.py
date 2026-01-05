@@ -281,7 +281,8 @@ class TaskEngine:
         welcome_enabled: bool,
         welcome_steps: List[Dict[str, str]],
     ) -> None:
-        tasks = feishu.fetch_tasks_by_status(["已申请"])
+        # 查询"已申请"（旧流程）和"未发送"（被动扫描新流程）的任务
+        tasks = feishu.fetch_tasks_by_status(["已申请", "未发送"])
         if not tasks:
             return
         for item in tasks:
@@ -348,8 +349,9 @@ class TaskEngine:
                 continue
 
             try:
-                feishu.upsert_contact_profile(phone=phone, name=nickname, remark=remark)
-                logger.info("[被动同步] {} -> 已写入飞书手机号字段", phone)
+                # 被动扫描发现的好友，写入飞书时状态为"未发送"
+                feishu.upsert_contact_profile(phone=phone, name=nickname, remark=remark, status="未发送")
+                logger.info("[被动同步] {} -> 已写入飞书，状态: 未发送", phone)
             except requests.HTTPError as http_err:
                 logger.error("飞书API网络错误 [{}]: {} - 检查网络连接和API配置", phone, http_err)
                 # 网络错误暂时跳过，下次轮询可能恢复
@@ -367,14 +369,5 @@ class TaskEngine:
                 # 未知错误记录但继续处理
                 continue
 
-            if self.welcome_enabled and self.welcome_steps:
-                search_keys = [phone]
-                if nickname:
-                    search_keys.append(nickname)
-                try:
-                    with self.wechat_lock:
-                        send_ok = wechat.send_welcome_package(search_keys, self.welcome_steps)
-                    if not send_ok:
-                        logger.warning("被动欢迎包发送失败 [{}]", phone)
-                except Exception as exc:  # noqa: BLE001
-                    logger.warning("被动欢迎包异常 [{}]: {}", phone, exc)
+            # 注意：不再在这里发送欢迎包，改为写入"未发送"状态
+            # 由 _handle_welcome_queue 统一查询"未发送"状态后发送欢迎包
