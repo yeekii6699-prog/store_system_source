@@ -21,13 +21,6 @@ from loguru import logger
 
 from ..config.settings import get_config
 
-# 添加文件日志，方便调试
-logger.add("debug_log.txt",
-           level="DEBUG",
-           format="{time:YYYY-MM-DD HH:mm:ss} | {level: <8} | {message}",
-           rotation="10 MB",
-           encoding="utf-8")
-
 
 class ContactProfile(TypedDict, total=False):
     """微信资料卡信息，用于被动同步到飞书。"""

@@ -110,8 +110,6 @@ class TaskEngine:
         self.wechat: WeChatRPA | None = None
         self.welcome_enabled: bool = False
         self.welcome_steps: List[Dict[str, str]] = []
-        # 不再使用硬编码的关键词，改为配置化
-        # self.passive_keywords: List[str] = ["已添加你为朋友", "你已添加了", "现在可以开始聊天了"]
         self.passive_scan_interval: float = float(self.cfg.get("MONITOR_SCAN_INTERVAL") or 30)  # 使用配置文件中的扫描间隔
         self.passive_scan_jitter: float = float(self.cfg.get("PASSIVE_SCAN_JITTER") or 10)  # 减少抖动时间
 
@@ -163,7 +161,7 @@ class TaskEngine:
         self.welcome_enabled = (self.cfg.get("WELCOME_ENABLED") or "0") == "1"
         self.welcome_steps = _load_welcome_steps(self.cfg)
         if self.welcome_enabled and not self.welcome_steps:
-            logger.warning("å·²å¯ç”¨é¦–æ¬¡æ¬¢è¿ŽåŒ…ï¼Œä½†æ²¡æœ‰é…ç½®ä»»ä½•æ­¥éª¤ï¼Œå°†è·³è¿‡è‡ªåŠ¨å‘é€?ã€?")
+            logger.warning("已启用首次欢迎包，但没有配置任何步骤，将跳过自动发送")
             self.welcome_enabled = False
 
         self._thread = threading.Thread(target=self._run, name="task-engine", daemon=True)
@@ -327,13 +325,7 @@ class TaskEngine:
         if feishu is None or wechat is None:
             return
 
-        # 使用微信RPA类中配置化的关键词，不再使用硬编码
-        # keywords = [kw for kw in self.passive_keywords if kw]
-        # if not keywords:
-        #     keywords = ["已添加你为朋友", "现在可以开始聊天了", "你已添加了"]
-
         with self.wechat_lock:
-            # 使用配置化的参数，不传递参数让它使用类中的默认配置
             contacts = wechat.scan_passive_new_friends()
             logger.debug("被动扫描完成，发现 {} 个新好友", len(contacts))
 
@@ -368,6 +360,3 @@ class TaskEngine:
                 logger.error("未知错误 [{}]: {} - 建议检查系统状态", phone, exc)
                 # 未知错误记录但继续处理
                 continue
-
-            # 注意：不再在这里发送欢迎包，改为写入"未发送"状态
-            # 由 _handle_welcome_queue 统一查询"未发送"状态后发送欢迎包
