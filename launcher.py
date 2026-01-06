@@ -17,8 +17,14 @@ import requests
 
 # ============== 需要按实际部署修改的常量 ==============
 CURRENT_VERSION = "0.0.1"
-VERSION_URL = "https://gitee.com/yeekii77/store_system/raw/master/version.txt"      # 远程版本号文本文件
+VERSION_URL = "https://gitee.com/yeekii77/store_system/raw/master/version.txt"  # 远程版本号文本文件
 ZIP_URL = "https://gitee.com/yeekii77/store_system/releases/download/1.1.0/main_bot.zip"  # 默认压缩包下载地址（回退用）
+
+# 支持环境变量覆盖
+if os.environ.get("VERSION_URL"):
+    VERSION_URL = os.environ["VERSION_URL"]
+if os.environ.get("ZIP_URL"):
+    ZIP_URL = os.environ["ZIP_URL"]
 HEADERS = {
     "User-Agent": (
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "

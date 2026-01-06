@@ -24,6 +24,9 @@ pip install -r requirements.txt
 # 运行程序
 python -m src.main
 
+# 启动器（带自动更新）
+python launcher.py
+
 # 检查飞书表格结构
 python -m src.utils.table_inspector
 ```
@@ -47,6 +50,9 @@ src/
 │   └── console.py       # Tk 控制台
 └── utils/
     └── table_inspector.py # 飞书表格结构工具
+
+launcher.py              # 自动更新启动器
+ui_probe.py              # UI 调试工具
 ```
 
 ## 核心概念
@@ -81,6 +87,9 @@ src/
 | `WELCOME_ENABLED` | 0 | 是否启用欢迎包 |
 | `MONITOR_MAX_CHATS` | 6 | 被动扫描会话数 |
 | `MONITOR_SCAN_INTERVAL` | 30 | 被动扫描间隔(秒) |
+| `FEISHU_WEBHOOK_URL` | - | 飞书 webhook URL（告警推送） |
+| `VERSION_URL` | - | 远程版本号地址（启动器） |
+| `ZIP_URL` | - | 远程压缩包地址（启动器） |
 
 ### GUI 配置
 

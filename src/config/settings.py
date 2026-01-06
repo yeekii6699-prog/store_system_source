@@ -495,7 +495,7 @@ def _prompt_full_config(defaults: Dict[str, str]) -> Tuple[Dict[str, str], bool]
         values = {k: v.get().strip() for k, v in field_vars.items()}
         missing = [label for key, label in field_labels.items() if key in required_keys and not values.get(key)]
         if missing:
-            messagebox.showerror("????", f"???: {', '.join(missing)}")
+            messagebox.showerror("配置错误", f"缺少必填字段: {', '.join(missing)}")
             return
         if welcome_enabled_var.get() and not welcome_steps:
             messagebox.showerror("请完善欢迎步骤", "请至少添加一个欢迎步骤后再开启自动欢迎功能。")

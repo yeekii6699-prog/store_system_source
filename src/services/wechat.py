@@ -240,6 +240,7 @@ class WeChatRPA:
             return None
 
         # 先点击"网络查找"选项（搜索框下方的第一个ListItemControl）
+        clicked = False  # 初始化点击状态
         network_find = main.ListItemControl(SubName="网络查找", searchDepth=15)
         if network_find.Exists(0.5):
             logger.debug("点击网络查找选项")

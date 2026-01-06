@@ -11,7 +11,7 @@ from pathlib import Path
 import requests
 from loguru import logger
 
-FEISHU_WEBHOOK_URL = "https://open.feishu.cn/open-apis/bot/v2/hook/f36edae0-95a4-4a59-b4da-ce58cff8f639"
+FEISHU_WEBHOOK_URL = ""  # 请在环境变量 FEISHU_WEBHOOK_URL 中配置
 COOLDOWN = 60  # 秒
 
 _last_push_ts: float = 0.0

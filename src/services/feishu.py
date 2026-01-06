@@ -154,7 +154,7 @@ class FeishuClient:
                 resp.raise_for_status()
 
                 data = resp.json()
-                if data.get("code") not in (0, None):
+                if data.get("code") not in (0,):
                     raise RuntimeError(
                         f"飞书接口返回异常 code={data.get('code')} msg={data.get('msg')} data={data}"
                     )
