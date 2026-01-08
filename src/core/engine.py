@@ -103,6 +103,7 @@ class TaskEngine:
     def __init__(self, cfg: Dict[str, str]) -> None:
         self.cfg = cfg
         self.stop_event = threading.Event()
+        self.pause_event = threading.Event()  # 暂停控制事件
         self._thread: threading.Thread | None = None
         self._passive_thread: threading.Thread | None = None
         self.wechat_lock = threading.Lock()
@@ -110,8 +111,76 @@ class TaskEngine:
         self.wechat: WeChatRPA | None = None
         self.welcome_enabled: bool = False
         self.welcome_steps: List[Dict[str, str]] = []
-        self.passive_scan_interval: float = float(self.cfg.get("MONITOR_SCAN_INTERVAL") or 30)  # 使用配置文件中的扫描间隔
-        self.passive_scan_jitter: float = float(self.cfg.get("PASSIVE_SCAN_JITTER") or 10)  # 减少抖动时间
+        self.passive_scan_interval: float = float(self.cfg.get("NEW_FRIEND_SCAN_INTERVAL") or 30)  # 新的好友扫描间隔
+        self.passive_scan_jitter: float = float(self.cfg.get("PASSIVE_SCAN_JITTER") or 5)  # 减少抖动时间
+        self.feishu_poll_interval: float = 5.0  # 飞书轮询间隔，默认5秒
+        # 统计计数器
+        self.apply_count = 0  # 申请处理数
+        self.welcome_count = 0  # 欢迎发送数
+        self.fail_count = 0  # 失败数
+        self._co_initialized = False  # COM初始化状态
+
+    def set_monitor_interval(self, seconds: float) -> None:
+        """设置被动监控扫描间隔（秒）"""
+        self.passive_scan_interval = max(5.0, float(seconds))
+        logger.info("监控频率已更新: {:.1f}秒", self.passive_scan_interval)
+
+    def set_jitter(self, seconds: float) -> None:
+        """设置扫描抖动时间（秒）"""
+        self.passive_scan_jitter = max(0.0, float(seconds))
+        logger.info("扫描抖动已更新: {:.1f}秒", self.passive_scan_jitter)
+
+    def set_feishu_poll_interval(self, seconds: float) -> None:
+        """设置飞书轮询间隔（秒）"""
+        self.feishu_poll_interval = max(3.0, float(seconds))
+        logger.info("飞书轮询频率已更新: {:.1f}秒", self.feishu_poll_interval)
+
+    def toggle_welcome(self, enabled: bool) -> None:
+        """切换欢迎包开关"""
+        self.welcome_enabled = enabled
+        logger.info("欢迎包功能已{}", "启用" if enabled else "禁用")
+
+    def is_paused(self) -> bool:
+        """检查是否已暂停"""
+        return self.pause_event.is_set()
+
+    def pause(self) -> bool:
+        """暂停监控，返回是否成功"""
+        if self.is_paused():
+            return False
+        self.pause_event.set()
+        logger.info("⏸️ 监控已暂停")
+        # 释放COM资源
+        self._release_com()
+        return True
+
+    def resume(self) -> bool:
+        """继续监控，返回是否成功"""
+        if not self.is_paused():
+            return False
+        self.pause_event.clear()
+        logger.info("▶️ 监控已继续")
+        return True
+
+    def _release_com(self) -> None:
+        """释放COM资源"""
+        if self._co_initialized and pythoncom is not None:
+            try:
+                pythoncom.CoUninitialize()
+                self._co_initialized = False
+                logger.debug("COM资源已释放")
+            except Exception:
+                pass
+
+    def _reinit_com(self) -> None:
+        """重新初始化COM资源"""
+        if pythoncom is not None and not self._co_initialized:
+            try:
+                pythoncom.CoInitialize()
+                self._co_initialized = True
+                logger.debug("COM资源已重新初始化")
+            except Exception:
+                logger.warning("COM重新初始化失败")
 
     def start(self) -> None:
         if self._thread and self._thread.is_alive():
@@ -182,6 +251,7 @@ class TaskEngine:
             try:
                 pythoncom.CoInitialize()
                 co_initialized = True
+                self._co_initialized = True
             except Exception:
                 logger.warning("COM 初始化失败，可能影响 RPA：{}", "CoInitialize 调用异常")
 
@@ -196,9 +266,14 @@ class TaskEngine:
 
             logger.info("系统启动，进入双队列任务循环...")
             while not self.stop_event.is_set():
+                # 检查暂停状态
+                if self.pause_event.is_set():
+                    self.pause_event.wait(1)  # 暂停时每秒检查一次
+                    continue
+
                 self._handle_apply_queue(feishu, wechat)
                 self._handle_welcome_queue(feishu, wechat, welcome_enabled, welcome_steps)
-                self.stop_event.wait(5)
+                self.pause_event.wait(self.feishu_poll_interval)
         except Exception as exc:  # noqa: BLE001
             if not self.stop_event.is_set():
                 logger.exception("任务引擎发生未处理异常: {}", exc)
@@ -215,12 +290,18 @@ class TaskEngine:
             try:
                 pythoncom.CoInitialize()
                 co_initialized = True
+                self._co_initialized = True
             except Exception:
                 logger.warning("COM 初始化失败，可能影响被动监听：{}", "CoInitialize 调用异常")
 
         try:
             scan_count = 0
             while not self.stop_event.is_set():
+                # 检查暂停状态
+                if self.pause_event.is_set():
+                    self.pause_event.wait(1)  # 暂停时每秒检查一次
+                    continue
+
                 scan_count += 1
                 logger.debug("🔍 开始第 {} 次被动扫描 (间隔: {:.1f}s)", scan_count, self.passive_scan_interval)
                 self._handle_passive_new_friends()
@@ -228,7 +309,7 @@ class TaskEngine:
                 wait_seconds = self.passive_scan_interval + random.uniform(-self.passive_scan_jitter, self.passive_scan_jitter)
                 wait_seconds = max(10.0, wait_seconds)  # 最少10秒间隔
                 logger.debug("⏰ 被动监听等待 {:.1f} 秒后进行下次扫描", wait_seconds)
-                self.stop_event.wait(wait_seconds)
+                self.pause_event.wait(wait_seconds)
         except Exception as exc:  # noqa: BLE001
             if not self.stop_event.is_set():
                 logger.exception("被动监听线程异常 {}", exc)
@@ -257,18 +338,22 @@ class TaskEngine:
             if relationship == "friend":
                 logger.info("{} 已经是好友，进入发送队列", phone)
                 feishu.update_status(record_id, "已申请")
+                self.apply_count += 1
                 continue
             if relationship == "stranger":
                 with self.wechat_lock:
                     apply_ok = wechat.apply_friend(phone)
                 if apply_ok:
                     feishu.update_status(record_id, "已申请")
+                    self.apply_count += 1
                 else:
                     logger.warning("申请发送失败 [{}]", phone)
+                    self.fail_count += 1
                 continue
             if relationship == "not_found":
-                logger.warning("未在微信中找到 [{}]，标记为“未找到”", phone)
+                logger.warning('未在微信中找到 [{}]，标记为"未找到"', phone)
                 feishu.update_status(record_id, "未找到")
+                self.fail_count += 1
                 continue
             logger.warning("无法确定 [{}] 关系状态，稍后重试", phone)
 
@@ -295,7 +380,8 @@ class TaskEngine:
                 relationship = wechat.check_relationship(phone)
             logger.info("[欢迎队列] 手机:{}, 关系检测: {}", phone, relationship)
             if relationship == "not_found":
-                logger.warning("[欢迎队列] {} 在微信中未找到记录，保持“已申请”待人工确认", phone)
+                logger.warning('[欢迎队列] {} 在微信中未找到记录，保持"已申请"待人工确认', phone)
+                self.fail_count += 1
                 continue
             if relationship != "friend":
                 logger.debug("{} 尚未通过验证，等待下一轮", phone)
@@ -316,8 +402,10 @@ class TaskEngine:
 
             if send_ok:
                 feishu.update_status(record_id, "已绑定")
+                self.welcome_count += 1
             else:
-                logger.warning("{} 欢迎消息发送失败，保持“已申请”供人工处理", phone)
+                logger.warning('{} 欢迎消息发送失败，保持"已申请"供人工处理', phone)
+                self.fail_count += 1
 
     def _handle_passive_new_friends(self) -> None:
         feishu = self.feishu
@@ -326,7 +414,8 @@ class TaskEngine:
             return
 
         with self.wechat_lock:
-            contacts = wechat.scan_passive_new_friends()
+            # 使用新的通讯录扫描方法
+            contacts = wechat.scan_new_friends_via_contacts()
             logger.debug("被动扫描完成，发现 {} 个新好友", len(contacts))
 
         if not contacts:

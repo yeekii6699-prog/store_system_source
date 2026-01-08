@@ -79,7 +79,7 @@ def run_self_check() -> None:
         logger.debug("鼠标控制权检测通过")
 
         candidates = [
-            {"Name": "微信", "ClassName": "WeChatMainWndForPC"},
+            {"Name": "微信", "ClassName": "mmui::MainWindow"},
             {"Name": "微信"},
             {"SubName": "微信"},
             {"Name": "WeChat"},

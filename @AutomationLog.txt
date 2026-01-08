@@ -1,0 +1,5 @@
+2026-01-08 22:13:29.381 wechat.py[701] _open_profile_from_chat -> 2026-01-09 00:27:53.695 wechat.py[1256] scan_passive_new_friends -> Can not move cursor. ListItemControl's BoundingRectangle is (0,0,0,0)[0x0]. SearchProperties: {ControlType: ListItemControl}
+2026-01-09 00:27:55.613 wechat.py[1256] scan_passive_new_friends -> Can not move cursor. ListItemControl's BoundingRectangle is (0,0,0,0)[0x0]. SearchProperties: {ControlType: ListItemControl}
+2026-01-09 00:27:57.527 wechat.py[1256] scan_passive_new_friends -> Can not move cursor. ListItemControl's BoundingRectangle is (0,0,0,0)[0x0]. SearchProperties: {ControlType: ListItemControl}
+2026-01-09 00:27:59.438 wechat.py[1256] scan_passive_new_friends -> Can not move cursor. ListItemControl's BoundingRectangle is (0,0,0,0)[0x0]. SearchProperties: {ControlType: ListItemControl}
+2026-01-09 00:28:01.348 wechat.py[1256] scan_passive_new_friends -> 

@@ -100,7 +100,7 @@ class NetworkConfig:
 
         # 检测到VPN环境时使用更宽松的SSL配置
         if self.has_vpn:
-            logger.info("VPN环境下使用宽松SSL配置")
+            logger.debug("VPN环境下使用宽松SSL配置")
             return {
                 "verify": True,
                 # 可以在这里添加SSL上下文配置

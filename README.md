@@ -1,125 +1,159 @@
-# Store Digital Operation System (Feishu + WeChat RPA)
+# Store Digital Operation System
 
-面向门店/客服的自动加好友与回写流程：从飞书多维表格（任务表）拉取手机号，校验客户表状态后，调用 PC 微信 RPA 添加好友，并回写处理状态。支持 Wiki 链接自动转 Base Token、GUI 配置与日志查看。
+门店自动化运营系统：从飞书拉取任务，自动通过 PC 微信添加好友，并回写处理状态。
 
-## 关键指标对齐表
-
-| 指标 | 项目侧价值/目标 | 系统抓手 |
-| --- | --- | --- |
-| 电话→加微→到店转化率 | 《项目商业与运营概览》在“数据统计与看板”中要求重点跟踪电话→加微→到店漏斗，并以此衡量门店增长质量。 | README 描述系统会从飞书任务表拉取手机号、核对客户表，再调用 PC 微信 RPA 自动加友并回写处理状态，天然沉淀漏斗数据。 |
-| 加友处理 SLA | 项目概览的“微信加好友与备注”明确前台录号后需即时自动加友，保障“手机号-姓名”链路不卡顿。 | 系统支持轮询任务表+PC 微信 RPA，启动 GUI 即可实时查看任务状态，避免人工延迟。 |
-| 预约冲突率 / 到店提醒及时率 | 项目概览的“自动接待与提醒”提到要自动防撞单、并在到店前 1 小时提醒前台和技师。 | README 的配置项要求填写预约表/客户表链接，系统据此在后台线程轮询，结合日志监控来保障预约执行。 |
-| 数据沉淀与交接完整度 | 项目概览强调客户档案、预约流水、交接都在飞书，保证“数据归属老板”。 | README 里的配置方式和日志章节说明所有运行参数、客户/预约表链接与日志都在本地受控，方便审计与交接。 |
-| 人效节省（小时/日） | “预期收益”估算每日可节省 1-2 小时重复操作，是 ROI 的硬指标。 | README 的功能特性（自动轮询、PC RPA、GUI 可视化）展示了具体的自动化手段，可被量化成节省的人力工时。 |
+[![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://www.python.org/downloads/)
+[![Platform](https://img.shields.io/badge/platform-Windows-lightgrey.svg)](https://github.com/yeekii6699-prog/store_system_source)
 
 ## 功能特性
-- 自动获取飞书 `tenant_access_token`，轮询任务表，按状态更新处理结果。
-- 支持飞书 Wiki 链接：自动将 `/wiki/<token>?table=tblxxx` 转换为 Bitable Base Token，再继续 API 调用。
-- PC 微信 RPA：搜索手机号、发送好友申请，支持自定义验证语；好友通过请直接在工作微信开启“自动通过好友验证”，系统不再额外模拟点击，避免多余操作。
-- 首次欢迎包：勾选 GUI 中的欢迎配置后，可上传多张门店指引图片与多行文案，系统在首次加好友成功后立即推送，减少人工复制粘贴。
-- GUI 主控台：启动即显示窗口，后台线程跑业务，可实时查看日志，手动停止立即退出。
-- 飞书远程告警：loguru ERROR/CRITICAL 日志会通过 webhook 推送到指定群聊（带 60s 冷却），方便远程调度排障。
-- 热更新启动器：读取远程 `version.txt` 的 `版本|zip直链`，下载解压 `main_bot.exe` 替换本地。
 
-## 目录结构（组件化）
+| 功能 | 说明 |
+|-----|------|
+| 飞书自动轮询 | 获取 tenant_access_token，轮询任务表并更新状态 |
+| Wiki 链接转换 | 自动将 `/wiki/<token>` 转换为 Bitable Base Token |
+| 微信主动添加 | 搜索手机号、发送好友申请，支持自定义验证语 |
+| 首次欢迎包 | 加好友成功后自动推送门店指引图片+文案 |
+| 新的好友监控 | 自动扫描「通讯录 → 新的好友 → 等待验证」，获取微信号写入飞书 |
+| GUI 控制台 | 实时日志查看、手动停止、状态监控、监控频率调节 |
+| 远程告警 | ERROR/CRITICAL 日志通过飞书 webhook 推送 |
+| 热更新启动器 | 自动下载更新包，无需手动替换 |
+
+## 目录结构
+
 ```
 .
 |-- README.md
 |-- RELEASE_GUIDE.md
 |-- requirements.txt
-|-- config.ini                 # 运行后生成/保存用户配置
+|-- config.ini                 # 运行后生成的用户配置
 |-- launcher.py                # 热更新启动器
-|-- src
-|   |-- main.py                # 简化入口：logger -> 自检 -> ConsoleApp
+|-- .env.example               # 环境变量示例
+|-- src/
+|   |-- main.py                # 入口：logger -> 自检 -> ConsoleApp
 |   |-- config/
-|   |   |-- settings.py        # GUI 配置与持久化（原 config.py）
-|   |   `-- logger.py          # 日志 & 飞书 webhook sink
+|   |   |-- settings.py        # GUI 配置与持久化
+|   |   |-- logger.py          # 日志 & 飞书 webhook
+|   |   |-- network.py         # 网络配置与 SSL
 |   |-- core/
 |   |   |-- system.py          # DPI、自检、环境检测
-|   |   `-- engine.py          # TaskEngine（飞书轮询 + 微信 RPA）
+|   |   |-- engine.py          # TaskEngine（飞书轮询 + 微信 RPA）
 |   |-- services/
-|   |   |-- feishu.py          # 飞书客户端封装
-|   |   `-- wechat.py          # 微信 RPA 实现
+|   |   |-- feishu.py          # 飞书客户端
+|   |   |-- wechat.py          # 微信 RPA（包含通讯录扫描）
 |   |-- ui/
-|   |   `-- console.py         # Tk 控制台（日志/按钮/状态）
+|   |   |-- console.py         # Tk 控制台
 |   `-- utils/
-|       `-- table_inspector.py # 飞书表结构辅助脚本
-`-- .env.example
+|       |-- table_inspector.py # 飞书表结构辅助脚本
+|-- ui_probe.py                # UI 控件调试工具
 ```
 
-## 环境要求
-- Windows，Python 3.10+（开发/调试）；打包使用 PyInstaller。
-- 已安装 PC 微信客户端，可被 RPA 控件访问。
-- 可访问飞书开放平台接口，并已在应用中开通 Wiki/Bitable 相关权限。
+## 快速开始
 
-## 安装依赖
+### 1. 安装依赖
+
 ```bash
 pip install -r requirements.txt
 ```
 
-## 配置方式
-### 1) GUI 配置（推荐）
-- 运行 `python -m src.main` 或打包后的 exe，启动后会弹出配置窗口（即使已有 config.ini 也会显示）。
-- 字段：
-  - 飞书 App ID / App Secret
-  - 预约表链接 (任务表)   -> `FEISHU_TABLE_URL`
-  - 客户表链接 (资料表)   -> `FEISHU_PROFILE_TABLE_URL`
-  - PC微信启动路径        -> `WECHAT_EXEC_PATH`
-- 勾选“记住配置”可写入 `config.ini`；未勾选则仅本次生效。
+### 2. 配置方式
 
-### 2) 环境变量或 config.ini
-- 可提前在环境变量中设置上述键，或手动编写 `config.ini` 的 `[DEFAULT]`。
-- 支持 `SKIP_CONFIG_UI=1` 跳过 GUI，前提是必填项已具备。
+#### GUI 配置（推荐）
 
-### 3) Wiki 链接支持
-- 粘贴形如 `https://ai.feishu.cn/wiki/<wiki_token>?table=tblxxx` 的链接即可。
-- 代码会先调用 `wiki/v2/spaces/get_node` 将 Wiki Token 转换为 Base Token，再拼出标准 Bitable 记录接口 URL。
+运行 `python -m src.main` 或打包后的 exe，弹出配置窗口：
 
-### 4) 首次欢迎包配置（可选）
-- 在 GUI 界面下方的“首次欢迎包配置”区域勾选“启用加好友成功后自动发送门店指引”即可生效。
-- “欢迎文案”支持多行输入，程序会自动用 `Shift+Enter` 插入换行，最后一次性发送。
-- “图片附件”允许一次选择多张 PNG/JPG/JPEG/BMP/GIF，RPA 会依次触发 `Ctrl+O`、填入路径并发送。
-- 如果希望通过环境变量或 `config.ini` 直接配置，可使用：
-  - `WELCOME_ENABLED=1`：代表开启欢迎包；
-  - `WELCOME_TEXT=第一行\n第二行`：多行之间用换行符；
-  - `WELCOME_IMAGE_PATHS=D:\guide\a.png|D:\guide\b.jpg`：使用 `|` 连接多张图片的绝对路径。
-- 仅当 RPA 返回状态为 `added`（首次加友）时推送，若发送失败会在日志提醒人工补发。
+| 字段 | 环境变量 | 说明 |
+|-----|---------|------|
+| 飞书 App ID | `FEISHU_APP_ID` | 应用唯一标识 |
+| 飞书 App Secret | `FEISHU_APP_SECRET` | 应用密钥 |
+| 任务表链接 | `FEISHU_TABLE_URL` | 待处理任务来源 |
+| 客户表链接 | `FEISHU_PROFILE_TABLE_URL` | 客户档案存储 |
+| 微信启动路径 | `WECHAT_EXEC_PATH` | 微信可执行文件位置 |
+| 启用欢迎包 | `WELCOME_ENABLED` | 0=关闭，1=开启 |
 
-## 运行方式
-### 源码运行
+#### 环境变量或 config.ini
+
+提前设置环境变量，或手动编写 `config.ini` 的 `[DEFAULT]` 段。
+
+#### Wiki 链接支持
+
+粘贴 `https://ai.feishu.cn/wiki/<wiki_token>?table=tblxxx` 格式链接，系统自动转换。
+
+### 3. 首次欢迎包（可选）
+
+GUI 勾选启用后，可配置：
+
+- **欢迎文案**：多行输入，程序自动处理换行
+- **图片附件**：支持 PNG/JPG/JPG/GIF，多张依次发送
+
+或通过环境变量配置：
+```ini
+WELCOME_ENABLED=1
+WELCOME_TEXT=第一行\n第二行
+WELCOME_IMAGE_PATHS=D:\guide\a.png|D:\guide\b.jpg
+```
+
+### 4. 新的好友监控
+
+程序会自动监控微信「通讯录 → 新的好友 → 等待验证」列表：
+
+- **监控频率**：默认 30 秒，可在 GUI 运行时实时调节（5-300秒）
+- **操作流程**：点击待验证项 → 点击前往验证 → 点击确定 → 获取微信号 → 写入飞书状态「未发送」
+- **自动去重**：好友通过后自动从列表移除，无需额外处理
+
+### 5. 运行程序
+
 ```bash
 python -m src.main
 ```
-- 启动窗口：“Store 小助手 - 运行中”
-- 窗口包含：状态标签、日志区域、停止按钮；业务轮询在后台守护线程执行。
-- 关闭窗口/点击停止，会发送停止信号并调用 `os._exit(0)` 强制退出，避免残留进程。
+
+启动后窗口显示 "Store 小助手 - 运行中"，包含状态标签、监控频率调节、日志区域和停止按钮。
 
 ### 查看飞书字段样例
+
 ```bash
 python -m src.utils.table_inspector
 ```
 
-## 日志
-- 文件：`logs/run.log`（自动轮转，UTF-8）
-- 窗口日志：通过队列实时显示。
+### UI 控件调试
 
-## 热更新/启动器（launcher.py）
-- 远程 `version.txt` 格式：`版本号|zip直链`（例如 `1.2.3|https://.../main_bot.zip`）
-- 若缺少 `|url`，将回退到代码内默认 `ZIP_URL`（可能是旧包）。
-- 更新流程：比对远程版本 > 本地 `local_version.txt` -> 按链接下载 zip -> 解压出 `main_bot.exe` 覆盖 -> 写入新版本号。
-- 详情参见 `RELEASE_GUIDE.md`。
+如需调试微信 UI 控件定位，运行：
+
+```bash
+python ui_probe.py
+```
+
+将鼠标移动到目标位置，3秒后输出控件信息。
+
+## 日志
+
+- **文件**：`logs/run.log`（自动轮转，UTF-8 编码）
+- **窗口**：通过队列实时显示
+
+## 热更新启动器
+
+`launcher.py` 读取远程 `version.txt` 格式：`版本号|zip直链`
+
+```
+更新流程：比对远程版本 → 下载 zip → 解压覆盖 → 写入版本号
+```
 
 ## 常见问题
-- **打包时报 PermissionError 无法覆盖 dist/main_bot.exe**：旧进程仍在运行或被杀毒占用，先结束进程/放行后再打包，或更换输出名。
-- **更新后仍是旧版本**：检查远程 `version.txt` 是否正确写了直链；必要时删除本地 `local_version.txt` 后再运行 launcher。
-- **无法退出/残留进程**：新版 main.py 已在关闭时 `stop_event.set()` 后 `os._exit(0)`，若仍残留，手动结束进程。
-- **下载 403/重定向**：launcher 已伪装浏览器 UA 并启用 allow_redirects；确认下载直链可匿名访问。
 
-## 发布检查清单（简版）
-- [ ] `dist/main_bot.exe` 打包并跑通
+| 问题 | 解决方案 |
+|-----|---------|
+| 打包时 PermissionError | 结束旧进程或关闭杀毒软件 |
+| 更新后仍是旧版本 | 删除 `local_version.txt` 后重试 |
+| 无法退出/残留进程 | 手动结束进程或升级到新版 |
+| 下载 403/重定向 | 确认下载链接可匿名访问 |
+| 新的好友监控无响应 | 检查微信窗口可见性，查看 DEBUG 日志 |
+| 微信 RPA 操作失败 | 确认 UI 自动化权限，尝试配置 WECHAT_EXEC_PATH |
+
+## 发布检查清单
+
+- [ ] `dist/main_bot.exe` 打包并测试通过
 - [ ] `main_bot.zip` 内仅包含最新 exe
-- [ ] 远程 `version.txt` 已更新为 `新版本|新直链`
-- [ ] 远程直链可下载，version.txt 可访问
-- [ ] 通知用户退出旧进程并运行 launcher 触发更新
+- [ ] 远程 `version.txt` 更新为 `新版本|新直链`
+- [ ] 远程直链可正常下载
+- [ ] 通知用户运行 launcher 触发更新
 
-更多发布与回滚细节见 `RELEASE_GUIDE.md`。***
+详细发布与回滚指南见 [RELEASE_GUIDE.md](./RELEASE_GUIDE.md)。

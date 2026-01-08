@@ -51,9 +51,9 @@ def probe_mouse_position():
 
     while True:
         try:
-            # 获取鼠标位置的控件
-            element = auto.Element.FromPoint(auto.GetCursorPos())
-            control = auto.Control.FromElement(element)
+            # 获取鼠标位置的控件 (新版API)
+            x, y = auto.GetCursorPos()
+            control = auto.ControlFromPoint(x, y)
 
             if control:
                 # 获取所有祖先控件和自身

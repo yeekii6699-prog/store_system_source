@@ -13,6 +13,7 @@ import time
 import struct
 import ctypes
 import re
+import random
 from pathlib import Path
 from typing import Optional, Sequence, Literal, List, Dict, TypedDict
 
@@ -52,32 +53,9 @@ class WeChatRPA:
 
     def __init__(self, exec_path: Optional[str] = None):
         self.exec_path = exec_path
-        # 用于消息去重的集合
-        self._processed_messages = set()
-        # 加载配置参数
-        self._load_monitoring_config()
-
-    def _load_monitoring_config(self) -> None:
-        """加载监控相关配置参数"""
+        # 加载扫描间隔配置
         config = get_config()
-        self.max_chats = int(config.get("MONITOR_MAX_CHATS", "6"))
-        self.scan_interval = int(config.get("MONITOR_SCAN_INTERVAL", "30"))
-        # 解析关键词列表，支持逗号分隔；始终包含系统常见提示，防止配置缺失
-        default_keywords = [
-            "已添加你为朋友",
-            "你已添加了",
-            "你现在可以给 ta 发送消息",
-            "打招呼消息",
-            "你们现在是好友了",
-            "刚刚把你添加到通讯录",
-            "现在可以开始聊天了",
-            "以上是打招呼的消息",
-            "以上是打招呼的内容",
-        ]
-        keywords_str = config.get("MONITOR_KEYWORDS", "")
-        user_keywords = [kw.strip() for kw in keywords_str.split(",") if kw.strip()]
-        merged = list(dict.fromkeys(default_keywords + user_keywords))  # 去重保持顺序
-        self.monitor_keywords = merged
+        self.scan_interval = int(config.get("NEW_FRIEND_SCAN_INTERVAL", "30"))
 
     def _activate_window(self) -> bool:
         """强制激活微信窗口到前台"""
@@ -454,19 +432,80 @@ class WeChatRPA:
         time.sleep(0.3)
 
         try:
-            chat_content = self._find_chat_content_area(main_win)
-            if not chat_content:
-                # 兜底：直接从窗口获取所有TextControl
-                all_texts = self._collect_all_text_from_control(main_win, max_depth=15)
-                return all_texts
+            chat_list = self._find_chat_message_list(main_win)
+            if chat_list:
+                return self._collect_all_text_from_control(chat_list, max_depth=20)
 
-            # 收集聊天内容区域中的所有文本
-            all_texts = self._collect_all_text_from_control(chat_content, max_depth=20)
-            return all_texts
+            chat_content = self._find_chat_content_area(main_win)
+            if chat_content:
+                return self._collect_all_text_from_control(chat_content, max_depth=20)
+
+            logger.debug("未找到聊天消息列表控件")
+            return messages
 
         except Exception as e:
             logger.debug("获取聊天消息失败: {}", e)
             return messages
+
+    def _find_chat_message_list(self, main_win: auto.WindowControl) -> Optional[auto.Control]:
+        """查找聊天消息列表控件（chat_message_list）。"""
+        try:
+            direct = main_win.ListControl(AutomationId="chat_message_list", searchDepth=15)
+            if direct.Exists(0.3):
+                return direct
+        except Exception:
+            pass
+
+        try:
+            direct = main_win.ListControl(Name="消息", searchDepth=15)
+            if direct.Exists(0.3):
+                return direct
+        except Exception:
+            pass
+
+        all_controls: list[auto.Control] = []
+        self._collect_all_controls(main_win, all_controls, max_depth=15)
+        candidates: list[auto.Control] = []
+        for ctrl in all_controls:
+            try:
+                if getattr(ctrl, "ControlTypeName", "") != "ListControl":
+                    continue
+                aid = str(getattr(ctrl, "AutomationId", "") or "")
+                name = str(getattr(ctrl, "Name", "") or "")
+                cls = str(getattr(ctrl, "ClassName", "") or "")
+                if aid == "session_list" or name == "会话":
+                    continue
+                if aid == "chat_message_list" or "RecyclerListView" in cls or name == "消息":
+                    candidates.append(ctrl)
+            except Exception:
+                continue
+
+        def _has_chat_parent(target: auto.Control) -> bool:
+            parent = target
+            for _ in range(8):
+                try:
+                    parent = parent.GetParentControl()
+                except Exception:
+                    return False
+                if not parent:
+                    return False
+                cls = str(getattr(parent, "ClassName", "") or "")
+                if (
+                    "ChatDetailView" in cls
+                    or "ChatMessagePage" in cls
+                    or "MessageView" in cls
+                    or "ChatMasterView" in cls
+                ):
+                    return True
+            return False
+
+        for ctrl in candidates:
+            if _has_chat_parent(ctrl):
+                return ctrl
+
+        if candidates:
+            return candidates[0]
+        return None
 
     def _collect_all_text_from_control(self, control: auto.Control, max_depth: int = 20, current_depth: int = 0) -> List[str]:
         """递归收集控件中的所有文本内容。"""
@@ -658,164 +697,123 @@ class WeChatRPA:
         main_win: auto.WindowControl,
     ) -> Optional[tuple[auto.Control, Optional[tuple[int, int, int, int]]]]:
         """
-        打开资料卡（侧栏固定路径版）：
-        1) 点击右上角“聊天信息/更多”按钮
-        2) 等侧栏展开后，按固定坐标点击侧栏的首个头像
+        打开资料卡：
+        基于聊天消息列表控件，定位消息条目中的头像控件并点击
         """
-        win_rect = main_win.BoundingRectangle
+        chat_list = self._find_chat_message_list(main_win)
+        if not chat_list:
+            logger.debug("未找到聊天消息列表")
+            return None
 
-        # 1) 点击右上角聊天信息/更多
-        clicked_info = False
-        btn = main_win.ButtonControl(Name="聊天信息", searchDepth=15)
-        if btn.Exists(0.6):
-            try:
-                btn.Click()
-                clicked_info = True
-                logger.debug("通过按钮 [聊天信息] 打开侧栏")
-            except Exception as exc:
-                logger.debug("点击按钮 [聊天信息] 失败: {}", exc)
-        if not clicked_info:
-            # 坐标兜底：窗口右上角
-            fallback_x = win_rect.right - 30
-            fallback_y = win_rect.top + 45
-            try:
-                auto.Click(fallback_x, fallback_y)
-                clicked_info = True
-                logger.debug("坐标兜底点击右上角: ({}, {})", fallback_x, fallback_y)
-            except Exception as exc:
-                logger.debug("右上角兜底点击失败: {}", exc)
+        try:
+            list_rect = chat_list.BoundingRectangle
+            items = chat_list.GetChildren()
+            if not items:
+                logger.debug("聊天消息列表为空")
                 return None
 
-        # 2) 等侧栏展开
-        time.sleep(0.8)
+            def _find_avatar_in_item(item_ctrl: auto.Control) -> Optional[auto.Control]:
+                candidates: list[auto.Control] = []
+                all_controls: list[auto.Control] = []
+                self._collect_all_controls(item_ctrl, all_controls, max_depth=6)
+                for ctrl in all_controls:
+                    try:
+                        ctrl_type = str(getattr(ctrl, "ControlTypeName", "") or "")
+                        if ctrl_type not in (
+                            "ImageControl",
+                            "ButtonControl",
+                            "PaneControl",
+                            "CustomControl",
+                            "GroupControl",
+                        ):
+                            continue
+                        aid = str(getattr(ctrl, "AutomationId", "") or "")
+                        cls = str(getattr(ctrl, "ClassName", "") or "")
+                        name = str(getattr(ctrl, "Name", "") or "")
+                        key = f"{aid} {cls} {name}".lower()
+                        if not any(k in key for k in ("avatar", "head", "portrait", "profile", "头像")):
+                            continue
+                        rect = ctrl.BoundingRectangle
+                        if rect.width() > list_rect.width() * 0.6 or rect.height() > list_rect.height() * 0.6:
+                            continue
+                        candidates.append(ctrl)
+                    except Exception:
+                        continue
 
-        # 3) 尝试点击侧栏头像（避免点到右侧“+”）
-        def _find_profile_popup() -> Optional[auto.WindowControl]:
-            popup = auto.WindowControl(ClassName="mmui::ProfileUniquePop", searchDepth=2)
-            if popup.Exists(0):
+                if not candidates:
+                    return None
+
+                left_boundary = list_rect.left + int(list_rect.width() * 0.45)
+                left_scored: list[tuple[int, auto.Control]] = []
+                scored: list[tuple[int, auto.Control]] = []
+                for ctrl in candidates:
+                    try:
+                        rect = ctrl.BoundingRectangle
+                        scored.append((rect.left, ctrl))
+                        if rect.left <= left_boundary:
+                            left_scored.append((rect.left, ctrl))
+                    except Exception:
+                        continue
+                if left_scored:
+                    left_scored.sort(key=lambda x: x[0])
+                    return left_scored[0][1]
+                scored.sort(key=lambda x: x[0])
+                return scored[0][1]
+
+            def _click_control_center(ctrl: auto.Control) -> bool:
+                try:
+                    rect = ctrl.BoundingRectangle
+                    auto.Click(rect.left + rect.width() // 2, rect.top + rect.height() // 2)
+                    return True
+                except Exception:
+                    return False
+
+            for item in reversed(items):
+                avatar_ctrl = _find_avatar_in_item(item)
+                if not avatar_ctrl:
+                    continue
+                if not _click_control_center(avatar_ctrl):
+                    continue
+                logger.debug("已点击消息头像控件")
+                time.sleep(0.5)
+                profile_win = self._wait_profile_window(main_win, timeout=1.6)
+                if profile_win:
+                    return (profile_win, None)
+
+            logger.debug("未能打开资料卡")
+            return None
+
+        except Exception as e:
+            logger.debug("定位头像失败: {}", e)
+            return None
+
+    def _wait_profile_window(self, main_win: auto.WindowControl, timeout: float) -> Optional[auto.WindowControl]:
+        """等待资料卡窗口（弹窗或侧栏）"""
+        end_time = time.time() + timeout
+        while time.time() < end_time:
+            # 方法1：检查弹窗式资料卡
+            popup = auto.WindowControl(ClassName="mmui::ProfileUniquePop", searchDepth=3)
+            if popup.Exists(0.3):
+                logger.debug("检测到弹窗式资料卡")
                 try:
                     popup.SetFocus()
                 except Exception:
                     pass
                 return popup
-            return None
 
-        def _wait_profile_window(timeout: float) -> Optional[auto.WindowControl]:
-            end_time = time.time() + timeout
-            while time.time() < end_time:
-                popup = _find_profile_popup()
-                if popup:
-                    logger.debug("弹窗资料卡已打开")
-                    return popup
-                for title in self.PROFILE_TITLES:
-                    win = auto.WindowControl(Name=title, searchDepth=1)
-                    if win.Exists(0):
-                        try:
-                            win.SetFocus()
-                        except Exception:
-                            pass
-                        return win
-                time.sleep(0.2)
-            return None
-
-        def _find_sidebar_panel_rect() -> Optional[tuple[int, int, int, int]]:
-            """基于几何特征判断侧栏资料面板是否已展开，返回矩形区域。"""
-            right_boundary = win_rect.left + int(win_rect.width() * 0.55)
-            min_w = int(win_rect.width() * 0.2)
-            max_w = int(win_rect.width() * 0.7)
-            min_h = int(win_rect.height() * 0.4)
-
-            best_rect = None
-            best_area = 0
-            try:
-                controls = main_win.GetDescendants()
-            except Exception:
-                return None
-
-            for ctrl in controls:
-                try:
-                    rect = ctrl.BoundingRectangle
-                    if rect.right <= right_boundary:
-                        continue
-                    width = rect.width()
-                    height = rect.height()
-                    if width < min_w or width > max_w or height < min_h:
-                        continue
-                    area = width * height
-                    if area > best_area:
-                        best_area = area
-                        best_rect = rect
-                except Exception:
-                    continue
-
-            if best_rect:
-                return (best_rect.left, best_rect.top, best_rect.right, best_rect.bottom)
-            return None
-
-        def _rect_intersects(ctrl: auto.Control, rect: tuple[int, int, int, int]) -> bool:
-            try:
-                c_rect = ctrl.BoundingRectangle
-            except Exception:
-                return False
-            left, top, right, bottom = rect
-            if c_rect.right <= left or c_rect.left >= right:
-                return False
-            if c_rect.bottom <= top or c_rect.top >= bottom:
-                return False
-            return True
-
-        def _log_sidebar_texts(rect: tuple[int, int, int, int]) -> None:
-            texts: list[str] = []
-            try:
-                for ctrl in main_win.GetDescendants():
+            # 方法2：检查标题为"详细资料"等窗口
+            for title in self.PROFILE_TITLES:
+                win = auto.WindowControl(Name=title, searchDepth=1)
+                if win.Exists(0.3):
+                    logger.debug("检测到资料窗口: {}", title)
                     try:
-                        if not _rect_intersects(ctrl, rect):
-                            continue
-                        name = str(getattr(ctrl, "Name", "") or "").strip()
-                        if name:
-                            texts.append(name)
-                            if len(texts) >= 20:
-                                break
+                        win.SetFocus()
                     except Exception:
-                        continue
-            except Exception:
-                return
-            if texts:
-                logger.debug("侧栏文本预览: {}", texts)
+                        pass
+                    return win
 
-        def _wait_sidebar_profile(timeout: float) -> Optional[tuple[int, int, int, int]]:
-            end_time = time.time() + timeout
-            while time.time() < end_time:
-                sidebar_rect = _find_sidebar_panel_rect()
-                if sidebar_rect:
-                    logger.debug("侧栏面板识别成功: {}", sidebar_rect)
-                    _log_sidebar_texts(sidebar_rect)
-                    return sidebar_rect
-                time.sleep(0.2)
-            return None
+            time.sleep(0.2)
 
-        target_y = win_rect.top + 140
-        # 偏移越大越靠左，优先试更靠左的位置
-        avatar_offsets = (260, 230, 205)
-        for offset in avatar_offsets:
-            target_x = win_rect.right - offset
-            try:
-                auto.Click(target_x, target_y)
-                logger.debug("侧栏头像尝试坐标点击: ({}, {})", target_x, target_y)
-            except Exception as exc:
-                logger.debug("点击侧栏头像失败: {}", exc)
-                continue
-
-            profile_win = _wait_profile_window(timeout=1.6)
-            if profile_win:
-                return (profile_win, None)
-
-            sidebar_rect = _wait_sidebar_profile(timeout=1.0)
-            if sidebar_rect:
-                logger.debug("侧栏资料已展开，使用主窗口继续提取")
-                return (main_win, sidebar_rect)
-
-        # 4) 所有坐标尝试后仍未找到资料卡
         return None
 
     def _click_avatar_if_possible(self, profile_win: auto.WindowControl) -> None:
@@ -1185,6 +1183,416 @@ class WeChatRPA:
         logger.debug("未从资料卡提取到微信号，可能需调整控件定位")
         return None
 
+    # ==================== 新的通讯录扫描逻辑 ====================
+
+    def _random_delay(self, min_sec: float = 0.5, max_sec: float = 1.5) -> None:
+        """随机延迟，防止操作过快被风控"""
+        delay = random.uniform(min_sec, max_sec)
+        time.sleep(delay)
+
+    def _click_contacts_tab(self) -> bool:
+        """点击侧边栏'通讯录' Tab"""
+        try:
+            contacts_tab = auto.ButtonControl(
+                Name="通讯录",
+                ClassName="mmui::XTabBarItem",
+                searchDepth=8
+            )
+            if contacts_tab.Exists(2):
+                contacts_tab.Click()
+                logger.debug("点击'通讯录' Tab成功")
+                self._random_delay()
+                return True
+            logger.warning("未找到'通讯录' Tab控件")
+            return False
+        except Exception as e:
+            logger.error("点击通讯录Tab失败: {}", e)
+            return False
+
+    def _click_new_friends_entry(self) -> bool:
+        """点击'新的朋友'入口，支持展开/收起状态"""
+        try:
+            # 先尝试直接获取待验证列表，检查是否已经展开
+            pending_items = self._get_pending_verification_items(check_only=True)
+            if pending_items is not None and len(pending_items) > 0:
+                logger.debug("'新的朋友'列表已展开，直接使用")
+                return True
+
+            # 未展开，需要点击展开
+            # 定位"新的朋友"入口
+            new_friends = auto.ListItemControl(
+                Name="新的朋友",
+                ClassName="mmui::ContactsCellGroupView",
+                searchDepth=15
+            )
+
+            if not new_friends.Exists(1):
+                # 遍历所有列表项查找
+                main_win = auto.WindowControl(searchDepth=1, Name=self.WINDOW_NAME)
+                if main_win.Exists(1):
+                    for ctrl in main_win.GetDescendants():
+                        try:
+                            if getattr(ctrl, "ControlTypeName", "") == "ListControl":
+                                for child in ctrl.GetChildren():
+                                    name = getattr(child, "Name", "") or ""
+                                    cls = getattr(child, "ClassName", "") or ""
+                                    if name == "新的朋友" and cls == "mmui::ContactsCellGroupView":
+                                        new_friends = child
+                                        break
+                        except Exception:
+                            continue
+                    if not new_friends.Exists(1):
+                        logger.warning("未找到'新的朋友'入口")
+                        return False
+
+            # 点击展开
+            new_friends.Click()
+            logger.debug("点击'新的朋友'入口展开列表")
+            self._random_delay(0.5, 1.0)
+            return True
+
+        except Exception as e:
+            logger.error("点击新的朋友入口失败: {}", e)
+            return False
+
+    def _get_pending_verification_items(self, check_only: bool = False) -> List[auto.ListItemControl]:
+        """
+        获取所有'等待验证'列表项
+
+        Args:
+            check_only: 如果为True，仅检查是否有待验证项而不返回（用于判断展开状态）
+        """
+        items: List[auto.ListItemControl] = []
+        try:
+            # 查找通讯录列表容器
+            list_container = auto.ListControl(
+                AutomationId="primary_table_.contact_list",
+                searchDepth=12
+            )
+
+            if not list_container.Exists(1):
+                # 尝试备用定位方式
+                list_container = auto.ListControl(
+                    ClassName="mmui::StickyHeaderRecyclerListView",
+                    searchDepth=12
+                )
+
+            if not list_container.Exists(1):
+                if not check_only:
+                    logger.debug("未找到通讯录列表控件")
+                return items
+
+            # 遍历所有子项
+            children = list_container.GetChildren()
+
+            for child in children:
+                try:
+                    item_name = getattr(child, "Name", "") or ""
+                    # 检查名称是否包含"等待验证"
+                    if "等待验证" in item_name:
+                        items.append(child)
+                except Exception:
+                    continue
+
+            if not check_only:
+                if items:
+                    logger.info("共找到 {} 个待验证项", len(items))
+                else:
+                    logger.debug("没有待验证的好友")
+            else:
+                # check_only模式下不打印日志
+                pass
+
+        except Exception as e:
+            if not check_only:
+                logger.error("获取待验证列表失败: {}", e)
+        return items
+
+    def _open_verification_detail(self, item: auto.Control) -> bool:
+        """点击待验证项，进入详情页"""
+        try:
+            if item.Exists(1):
+                item.Click()
+                logger.debug("点击待验证项成功")
+                self._random_delay()
+                return True
+            return False
+        except Exception as e:
+            logger.error("点击待验证项失败: {}", e)
+            return False
+
+    def _click_verify_button(self) -> bool:
+        """点击'前往验证'按钮"""
+        try:
+            # 等待页面加载
+            time.sleep(1.0)
+
+            # 扩大搜索范围
+            verify_btn = auto.ButtonControl(
+                Name="前往验证",
+                ClassName="mmui::XOutlineButton",
+                searchDepth=20
+            )
+
+            # 使用更长的时间检测
+            if verify_btn.Exists(5):
+                verify_btn.Click()
+                logger.debug("点击'前往验证'按钮成功")
+                self._random_delay(0.5, 1.0)
+                return True
+
+            # 备用：遍历所有ButtonControl查找
+            main_win = auto.WindowControl(searchDepth=1, Name=self.WINDOW_NAME)
+            if main_win.Exists(1):
+                for ctrl in main_win.GetDescendants():
+                    try:
+                        if getattr(ctrl, "ControlTypeName", "") == "ButtonControl":
+                            name = getattr(ctrl, "Name", "") or ""
+                            if name == "前往验证":
+                                ctrl.Click()
+                                logger.debug("通过遍历找到'前往验证'按钮并点击")
+                                self._random_delay(0.5, 1.0)
+                                return True
+                    except Exception:
+                        continue
+
+            logger.warning("未找到'前往验证'按钮")
+            return False
+        except Exception as e:
+            logger.error("点击前往验证按钮失败: {}", e)
+            return False
+
+    def _confirm_verification(self) -> bool:
+        """点击'确定'按钮确认验证"""
+        try:
+            # 等待弹窗加载
+            time.sleep(0.8)
+
+            # 查找验证窗口中的确定按钮（使用更大的搜索范围）
+            confirm_btn = auto.ButtonControl(
+                Name="确定",
+                ClassName="mmui::XOutlineButton",
+                searchDepth=15
+            )
+            if confirm_btn.Exists(3):
+                confirm_btn.Click()
+                logger.debug("点击'确定'按钮成功")
+                self._random_delay(0.5, 1.0)
+                return True
+
+            # 备用：遍历查找
+            all_buttons = auto.WindowControl(searchDepth=1, Name=self.WINDOW_NAME)
+            for ctrl in all_buttons.GetDescendants():
+                try:
+                    if getattr(ctrl, "ControlTypeName", "") == "ButtonControl":
+                        name = getattr(ctrl, "Name", "") or ""
+                        if name == "确定":
+                            ctrl.Click()
+                            logger.debug("通过遍历找到'确定'按钮并点击")
+                            self._random_delay(0.5, 1.0)
+                            return True
+                except Exception:
+                    continue
+
+            logger.warning("未找到'确定'按钮")
+            return False
+        except Exception as e:
+            logger.error("点击确定按钮失败: {}", e)
+            return False
+
+    def _extract_wechat_id_from_profile(self) -> Optional[str]:
+        """从资料卡片中提取微信号（右侧区域）"""
+        try:
+            # 等待页面完全加载
+            time.sleep(1.0)
+
+            main_win = auto.WindowControl(searchDepth=1, Name=self.WINDOW_NAME)
+            if not main_win.Exists(1):
+                logger.debug("未找到微信主窗口")
+                return None
+
+            # 使用递归方式收集所有子控件
+            def collect_controls(control, depth=0, max_depth=50):
+                """递归收集所有控件"""
+                if depth > max_depth:
+                    return []
+                result = [control]
+                try:
+                    for child in control.GetChildren():
+                        result.extend(collect_controls(child, depth + 1, max_depth))
+                except Exception:
+                    pass
+                return result
+
+            all_controls = collect_controls(main_win)
+
+            # 找到所有 ContactProfileTextView 控件
+            profile_text_views = []
+            for ctrl in all_controls:
+                try:
+                    ctrl_class = getattr(ctrl, "ClassName", "") or ""
+                    if "ContactProfileTextView" in ctrl_class:
+                        ctrl_automation_id = getattr(ctrl, "AutomationId", "") or ""
+                        ctrl_name = getattr(ctrl, "Name", "") or ""
+                        profile_text_views.append({
+                            "name": ctrl_name,
+                            "automation_id": ctrl_automation_id,
+                        })
+                except Exception:
+                    continue
+
+            # 打印所有找到的 ContactProfileTextView 控件信息
+            logger.debug("找到 {} 个 ContactProfileTextView 控件:", len(profile_text_views))
+            for i, item in enumerate(profile_text_views):
+                logger.debug("  [{}] Name='{}', AutomationId='{}'",
+                            i, item["name"], item["automation_id"])
+
+            # 方法: 在 basic_line_view 下找到所有 ContactProfileTextView
+            # 微信号、昵称、地区都在这里，需要筛选
+            for item in profile_text_views:
+                ctrl_name = item["name"]
+                ctrl_automation_id = item["automation_id"]
+
+                # 只处理 basic_line_view 下的控件
+                if "basic_line_view" in ctrl_automation_id and ctrl_automation_id.endswith("ContactProfileTextView"):
+                    # 检查是否符合微信号格式（4-20位字母数字下划线）
+                    import re
+                    if re.match(r"^[A-Za-z0-9_.-]{4,20}$", ctrl_name):
+                        logger.debug("提取到微信号: {} (AutomationId={})", ctrl_name, ctrl_automation_id)
+                        return ctrl_name
+
+            logger.debug("未找到有效的微信号")
+            return None
+        except Exception as e:
+            logger.error("提取微信号失败: {}", e)
+            return None
+
+    def _return_to_chat_list(self) -> bool:
+        """返回聊天列表界面"""
+        try:
+            # 点击微信Tab返回聊天列表
+            wechat_tab = auto.ButtonControl(
+                Name="微信",
+                ClassName="mmui::XTabBarItem",
+                searchDepth=8
+            )
+            if wechat_tab.Exists(2):
+                wechat_tab.Click()
+                logger.debug("返回聊天列表成功")
+                self._random_delay()
+                return True
+            logger.warning("未找到'微信' Tab")
+            return False
+        except Exception as e:
+            logger.error("返回聊天列表失败: {}", e)
+            return False
+
+    def scan_new_friends_via_contacts(self) -> List[ContactProfile]:
+        """
+        通过通讯录-新的好友扫描待验证的好友，提取微信号并返回。
+
+        流程：
+        1. 点击通讯录Tab
+        2. 点击新的朋友入口
+        3. 遍历等待验证列表
+        4. 点击具体项 -> 点击前往验证 -> 点击确定 -> 获取微信号
+        5. 写入飞书（状态=未发送）
+        6. 返回聊天列表
+
+        Returns:
+            List[ContactProfile]: 发现的新好友列表
+        """
+        results: List[ContactProfile] = []
+
+        if not self._activate_window():
+            return results
+
+        # 步骤1: 点击通讯录
+        if not self._click_contacts_tab():
+            return results
+
+        # 步骤2: 点击新的朋友
+        if not self._click_new_friends_entry():
+            return results
+
+        # 步骤3: 获取待验证列表
+        pending_items = self._get_pending_verification_items(check_only=False)
+        if not pending_items:
+            logger.debug("没有待验证的好友")
+            self._return_to_chat_list()
+            return results
+
+        logger.info("开始处理 {} 个待验证好友", len(pending_items))
+
+        # 遍历每个待验证项
+        for idx, item in enumerate(pending_items, 1):
+            try:
+                item_name = getattr(item, "Name", "") or f"待验证项{idx}"
+                logger.info("[{}/{}] 处理: {}", idx, len(pending_items), item_name)
+
+                # 步骤4: 点击进入详情
+                if not self._open_verification_detail(item):
+                    logger.warning("无法进入详情页，跳过: {}", item_name)
+                    continue
+
+                # 步骤5: 点击前往验证
+                if not self._click_verify_button():
+                    logger.warning("点击前往验证失败，跳过: {}", item_name)
+                    continue
+
+                # 步骤6: 点击确定确认验证
+                if not self._confirm_verification():
+                    logger.warning("点击确定失败，跳过: {}", item_name)
+                    continue
+
+                # 步骤7: 等待资料卡片加载并提取微信号
+                time.sleep(0.8)  # 等待页面加载
+                wechat_id = self._extract_wechat_id_from_profile()
+
+                if wechat_id:
+                    # 从名称中提取昵称（去掉"等待验证"后缀）
+                    nickname = item_name.replace("等待验证", "").strip()
+                    if not nickname:
+                        nickname = None
+
+                    profile: ContactProfile = {
+                        "wechat_id": wechat_id,
+                        "nickname": nickname,
+                        "remark": None
+                    }
+                    results.append(profile)
+                    logger.info("[{}/{}] 成功提取: 微信号={}, 昵称={}", idx, len(pending_items), wechat_id, nickname)
+                else:
+                    logger.warning("[{}/{}] 未能提取到微信号: {}", idx, len(pending_items), item_name)
+
+                # 步骤9: 返回聊天列表，继续下一个
+                self._return_to_chat_list()
+
+                # 重新进入通讯录页面
+                if idx < len(pending_items):
+                    self._click_contacts_tab()
+                    self._click_new_friends_entry()
+
+            except Exception as e:
+                logger.error("[{}/{}] 处理异常: {} - {}", idx, len(pending_items), item_name, e)
+                # 尝试返回聊天列表恢复状态
+                try:
+                    self._return_to_chat_list()
+                except Exception:
+                    pass
+                continue
+
+        # 确保返回聊天列表
+        try:
+            self._return_to_chat_list()
+        except Exception:
+            pass
+
+        logger.info("扫描完成，发现 {} 个新好友", len(results))
+        return results
+
+    # ==================== 旧的会话列表扫描逻辑（已废弃） ====================
+
     def scan_passive_new_friends(self, keywords: Sequence[str] | None = None, max_chats: int | None = None) -> List[ContactProfile]:
         """
         从会话列表被动扫描"已添加"系统提示，提取资料并返回列表。
@@ -1287,8 +1695,10 @@ class WeChatRPA:
                 continue
 
             time.sleep(0.8)
-            has_keywords = pre_match or self._chat_has_keywords(main, keywords)
+            has_keywords = self._chat_has_keywords(main, keywords)
             if not has_keywords:
+                if pre_match:
+                    logger.debug("List item preview matched, but ignored to avoid sidebar noise.")
                 logger.debug("会话 {} 未包含关键词，跳过", idx)
                 continue
             else:
