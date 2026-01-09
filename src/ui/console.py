@@ -28,7 +28,8 @@ class ConsoleApp:
 
         self.status_label = None
         self.stop_btn = None
-        self.log_box = None
+        self.log_box_active = None  # 主动加好友日志
+        self.log_box_passive = None  # 被动加好友日志
         self.pause_btn = None
         self.welcome_var = None
         self._build_ui()

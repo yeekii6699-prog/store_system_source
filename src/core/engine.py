@@ -303,7 +303,7 @@ class TaskEngine:
                     continue
 
                 scan_count += 1
-                logger.debug("🔍 开始第 {} 次被动扫描 (间隔: {:.1f}s)", scan_count, self.passive_scan_interval)
+                logger.info("[被动扫描] 🔍 开始第 {} 次扫描 (间隔: {:.1f}s)", scan_count, self.passive_scan_interval)
                 self._handle_passive_new_friends()
 
                 wait_seconds = self.passive_scan_interval + random.uniform(-self.passive_scan_jitter, self.passive_scan_jitter)

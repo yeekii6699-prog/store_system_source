@@ -1378,6 +1378,8 @@ class WeChatRPA:
                 confirm_btn.Click()
                 logger.debug("点击'确定'按钮成功")
                 self._random_delay(0.5, 1.0)
+                # 等待资料卡片加载完成，否则太快判断"未找到"
+                time.sleep(1.5)
                 return True
 
             # 备用：遍历查找
@@ -1390,6 +1392,8 @@ class WeChatRPA:
                             ctrl.Click()
                             logger.debug("通过遍历找到'确定'按钮并点击")
                             self._random_delay(0.5, 1.0)
+                            # 等待资料卡片加载完成，否则太快判断"未找到"
+                            time.sleep(1.5)
                             return True
                 except Exception:
                     continue
@@ -1545,9 +1549,24 @@ class WeChatRPA:
                     logger.warning("点击确定失败，跳过: {}", item_name)
                     continue
 
-                # 步骤7: 等待资料卡片加载并提取微信号
-                time.sleep(0.8)  # 等待页面加载
-                wechat_id = self._extract_wechat_id_from_profile()
+                # 步骤7: 等待资料卡片加载并提取微信号（最多等待30秒）
+                logger.info("[{}/{}] 正在等待资料卡片加载...", idx, len(pending_items))
+                wechat_id = None
+                start_wait = time.time()
+                wait_timeout = 30.0  # 30秒超时
+
+                while time.time() - start_wait < wait_timeout:
+                    wechat_id = self._extract_wechat_id_from_profile()
+                    if wechat_id:
+                        logger.info("[{}/{}] 资料卡片加载完成，微信号: {}", idx, len(pending_items), wechat_id)
+                        break
+                    time.sleep(1.0)  # 每1秒重试一次
+
+                if not wechat_id:
+                    # 超时未找到微信号，记录错误日志（会自动推送到飞书）
+                    err_msg = f"[{idx}/{len(pending_items)}] 等待30秒后未能提取到微信号: {item_name}"
+                    logger.error(err_msg)
+                    raise TimeoutError(err_msg)
 
                 if wechat_id:
                     # 从名称中提取昵称（去掉"等待验证"后缀）
