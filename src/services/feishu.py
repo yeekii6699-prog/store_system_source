@@ -289,6 +289,33 @@ class FeishuClient:
         return data.get("data", {}).get("items", [])
 
     # ========================= 业务方法 =========================
+    def search_by_field(self, field_name: str, value: Any) -> List[Dict[str, Any]]:
+        """
+        通用字段搜索方法，根据指定字段和值查询记录。
+
+        Args:
+            field_name: 字段名称
+            value: 要搜索的值
+
+        Returns:
+            匹配的记录列表
+        """
+        payload = {
+            "filter": {
+                "conditions": [
+                    {
+                        "field_name": field_name,
+                        "operator": "is",
+                        "value": [value],
+                    }
+                ],
+                "conjunction": "and",
+            }
+        }
+        logger.debug("搜索字段 [{}] = {}", field_name, value)
+        data = self._request("POST", self.profile_table_url + "/search", json=payload)
+        return data.get("data", {}).get("items", [])
+
     def search_customer(self, phone: str) -> Tuple[bool, str, str]:
         """
         在客户表按手机号查询，返回 (是否存在, 状态, 姓名)。
@@ -296,22 +323,7 @@ class FeishuClient:
         if not isinstance(phone, str):
             phone = str(phone)
 
-        payload = {
-            "filter": {
-                "conditions": [
-                    {
-                        "field_name": self.profile_field_phone,
-                        "operator": "is",
-                        "value": [phone],
-                    }
-                ],
-                "conjunction": "and",
-            }
-        }
-        url = self.profile_table_url
-        logger.debug("查询客户手机号: {}", phone)
-        data = self._request("POST", url + "/search", json=payload)
-        items: List[Dict[str, Any]] = data.get("data", {}).get("items", [])
+        items = self.search_by_field(self.profile_field_phone, phone)
         if not items:
             return False, "", ""
 
@@ -319,6 +331,20 @@ class FeishuClient:
         status = record.get("微信绑定状态", "")
         name = record.get("姓名", "")
         return True, status, name
+
+    def search_by_nickname(self, nickname: str) -> List[Dict[str, Any]]:
+        """
+        按昵称查询客户表记录，用于被动监控时匹配"已通过"的好友。
+
+        Args:
+            nickname: 昵称字符串
+
+        Returns:
+            匹配的记录列表
+        """
+        if not nickname or not nickname.strip():
+            return []
+        return self.search_by_field("昵称", nickname.strip())
 
     def fetch_new_tasks(self) -> List[Dict[str, Any]]:
         """
@@ -400,69 +426,129 @@ class FeishuClient:
 
     def update_status(self, record_id: str, status: str) -> None:
         """
-        通用状态更新入口，便于双队列流程设置“已申请”“已绑定”等值。
+        通用状态更新入口，便于双队列流程设置"已申请""已绑定"等值。
+        """
+        self.update_record(record_id, {"微信绑定状态": status})
+
+    def update_record(self, record_id: str, fields: Dict[str, Any]) -> None:
+        """
+        通用记录更新方法，更新指定记录的指定字段。
+
+        Args:
+            record_id: 记录ID
+            fields: 要更新的字段字典
         """
         url = f"{self.profile_table_url}/{record_id}"
-        payload = {"fields": {"微信绑定状态": status}}
-        logger.debug("更新记录 {} 状态 -> {}", record_id, status)
+        payload = {"fields": fields}
+        logger.debug("更新记录 {}: {}", record_id, fields)
         self._request("PUT", url, json=payload)
+
+    def batch_update_status(self, record_ids: List[str], status: str) -> int:
+        """
+        批量更新记录状态。
+
+        Args:
+            record_ids: 记录ID列表
+            status: 要设置的状态值
+
+        Returns:
+            成功更新的记录数
+        """
+        success_count = 0
+        for record_id in record_ids:
+            try:
+                self.update_status(record_id, status)
+                success_count += 1
+            except Exception as e:
+                logger.warning("批量更新状态失败 [{}]: {}", record_id, e)
+        logger.info("批量更新状态完成: 成功 {}/{}", success_count, len(record_ids))
+        return success_count
 
     # ========================= 被动写入资料 =========================
     def _find_profile_by_phone(self, phone: str) -> str | None:
         """按手机号搜索客户表，返回 record_id（若存在）。"""
-        payload = {
-            "filter": {
-                "conditions": [
-                    {
-                        "field_name": self.profile_field_phone,
-                        "operator": "is",
-                        "value": [phone],
-                    }
-                ],
-                "conjunction": "and",
-            }
-        }
-        data = self._request("POST", self.profile_table_url + "/search", json=payload)
-        items: List[Dict[str, Any]] = data.get("data", {}).get("items", [])
+        items = self.search_by_field(self.profile_field_phone, phone)
         if not items:
             return None
-        record = items[0]
-        return self._extract_record_id(record)
+        return self._extract_record_id(items[0])
 
-    def upsert_contact_profile(self, phone: str, name: str | None = None, remark: str | None = None, status: str | None = None) -> str:
+    def upsert_contact_profile(self, wechat_id: str, nickname: str | None = None, phone: str | None = None, remark: str | None = None, status: str | None = None) -> str:
         """
-        将微信号写入"手机号"字段，若已存在则更新姓名/备注，否则创建记录。
+        将微信号/手机号写入飞书，若已存在则更新，否则创建记录。
         若指定 status，则同时更新"微信绑定状态"字段。
 
+        搜索优先级：
+        1. 先按手机号搜索
+        2. 找不到则按昵称搜索（用于被动加好友时匹配主动添加的记录）
+        3. 都找不到才新建
+
         Args:
-            phone: 微信号（存入手机号字段）
-            name: 昵称（存入姓名字段）
+            wechat_id: 微信号（存入微信号字段）
+            nickname: 昵称（存入昵称字段）
+            phone: 手机号（存入手机号字段）
             remark: 备注（存入微信备注字段）
             status: 状态值（如"已绑定"），用于直接设置微信绑定状态
 
         Returns:
             record_id: 记录 ID（存在或新建）
         """
-        phone = (phone or "").strip()
-        if not phone:
-            raise ValueError("phone is required for upsert_contact_profile")
+        wechat_id = (wechat_id or "").strip()
+        if not wechat_id:
+            raise ValueError("wechat_id is required for upsert_contact_profile")
 
-        fields: Dict[str, Any] = {self.profile_field_phone: phone}
-        if name:
-            fields[self.profile_field_name] = name
+        # 构建字段
+        fields: Dict[str, Any] = {"微信号": wechat_id}
+        if nickname:
+            fields["昵称"] = nickname
+        if phone:
+            fields["手机号"] = phone
         if remark:
             fields[self.profile_field_remark] = remark
         if status:
             fields["微信绑定状态"] = status
 
-        record_id = self._find_profile_by_phone(phone)
-        if record_id:
-            url = f"{self.profile_table_url}/{record_id}"
-            logger.debug("被动写入：更新已有记录 {} -> {}", record_id, fields)
-            self._request("PUT", url, json={"fields": fields})
-            return record_id
+        # 1. 先按手机号搜索（如果传入了手机号）
+        if phone:
+            record_id = self._find_profile_by_phone(phone)
+            if record_id:
+                # 更新微信号和状态，保留其他字段
+                update_fields = {"微信号": wechat_id}
+                if status:
+                    update_fields["微信绑定状态"] = status
+                self.update_record(record_id, update_fields)
+                logger.debug("被动写入：按手机号找到并更新记录 {} -> {}", record_id, update_fields)
+                return record_id
 
-        logger.debug("被动写入：新增记录 -> {}", fields)
+        # 2. 按昵称搜索（用于被动加好友时匹配主动添加的记录）
+        if nickname:
+            items = self.search_by_field("昵称", nickname)
+            if items:
+                record_id = self._extract_record_id(items[0])
+                # 只更新微信号和状态
+                update_fields = {"微信号": wechat_id}
+                if phone:
+                    update_fields["手机号"] = phone
+                if status:
+                    update_fields["微信绑定状态"] = status
+                self.update_record(record_id, update_fields)
+                logger.debug("被动写入：按昵称找到并更新记录 {} -> {}", record_id, update_fields)
+                return record_id
+
+        # 3. 都找不到，新建记录
+        record_id = self.create_record(fields)
+        logger.debug("被动写入：新增记录 {} -> {}", record_id, fields)
+        return record_id
+
+    def create_record(self, fields: Dict[str, Any]) -> str:
+        """
+        在客户表创建新记录。
+
+        Args:
+            fields: 要创建的字段字典
+
+        Returns:
+            record_id: 新创建的记录 ID
+        """
         data = self._request("POST", self.profile_table_url, json={"fields": fields})
         record = data.get("data", {}).get("record", {})
         return self._extract_record_id(record)

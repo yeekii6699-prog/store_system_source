@@ -2,4 +2,16 @@
 2026-01-09 00:27:55.613 wechat.py[1256] scan_passive_new_friends -> Can not move cursor. ListItemControl's BoundingRectangle is (0,0,0,0)[0x0]. SearchProperties: {ControlType: ListItemControl}
 2026-01-09 00:27:57.527 wechat.py[1256] scan_passive_new_friends -> Can not move cursor. ListItemControl's BoundingRectangle is (0,0,0,0)[0x0]. SearchProperties: {ControlType: ListItemControl}
 2026-01-09 00:27:59.438 wechat.py[1256] scan_passive_new_friends -> Can not move cursor. ListItemControl's BoundingRectangle is (0,0,0,0)[0x0]. SearchProperties: {ControlType: ListItemControl}
-2026-01-09 00:28:01.348 wechat.py[1256] scan_passive_new_friends -> 
+2026-01-09 00:28:01.348 wechat.py[1256] scan_passive_new_friends -> 2026-01-10 16:53:32.853 wechat_contacts.py[188] _open_new_friend_detail -> 2026-01-10 17:01:39.124 wechat_contacts.py[188] _open_new_friend_detail -> Can not move cursor. ListItemControl's BoundingRectangle is (0,0,0,0)[0x0]. SearchProperties: {ControlType: ListItemControl}
+2026-01-10 17:02:28.860 wechat_contacts.py[188] _open_new_friend_detail -> 2026-01-10 17:16:43.983 wechat_contacts.py[188] _open_new_friend_detail -> 2026-01-10 17:57:23.975 wechat_contacts.py[385] _right_click_and_delete -> 2026-01-10 18:28:09.150 wechat_contacts.py[385] _right_click_and_delete -> 2026-01-10 18:42:05.012 wechat_contacts.py[210] _open_new_friend_detail -> Can not move cursor. ListItemControl's BoundingRectangle is (0,0,0,0)[0x0]. SearchProperties: {ControlType: ListItemControl}
+2026-01-10 18:42:19.336 wechat_contacts.py[210] _open_new_friend_detail -> Can not move cursor. ListItemControl's BoundingRectangle is (0,0,0,0)[0x0]. SearchProperties: {ControlType: ListItemControl}
+2026-01-10 18:43:26.378 wechat_contacts.py[210] _open_new_friend_detail -> 2026-01-10 19:55:26.047 _better_exceptions.py[340] _format_value -> Find Control Timeout(10s): {Name: '申请添加朋友', ControlType: WindowControl}
+2026-01-10 19:55:36.306 _better_exceptions.py[340] _format_value -> Find Control Timeout(10s): {Name: '申请添加朋友', ControlType: WindowControl}
+2026-01-10 19:55:46.538 _better_exceptions.py[340] _format_value -> Find Control Timeout(10s): {Name: '申请添加朋友', ControlType: WindowControl}
+2026-01-10 19:55:56.765 _better_exceptions.py[340] _format_value -> Find Control Timeout(10s): {Name: '申请添加朋友', ControlType: WindowControl}
+2026-01-10 19:56:06.996 _better_exceptions.py[340] _format_value -> 2026-01-11 13:56:37.072 _better_exceptions.py[340] _format_value -> Find Control Timeout(10s): {Name: '申请添加朋友', ControlType: WindowControl}
+2026-01-11 13:56:47.305 _better_exceptions.py[340] _format_value -> Find Control Timeout(10s): {Name: '申请添加朋友', ControlType: WindowControl}
+2026-01-11 13:56:57.541 _better_exceptions.py[340] _format_value -> Find Control Timeout(10s): {Name: '申请添加朋友', ControlType: WindowControl}
+2026-01-11 13:57:07.791 _better_exceptions.py[340] _format_value -> Find Control Timeout(10s): {Name: '申请添加朋友', ControlType: WindowControl}
+2026-01-11 13:57:17.797 _better_exceptions.py[340] _format_value -> Find Control Timeout(10s): {Name: '申请添加朋友', ControlType: WindowControl}
+2026-01-11 13:57:28.066 _better_exceptions.py[340] _format_value -> 

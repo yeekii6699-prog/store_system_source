@@ -5,7 +5,7 @@ import random
 import requests
 import threading
 import time
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from loguru import logger
 
@@ -258,8 +258,6 @@ class TaskEngine:
         try:
             feishu = self.feishu
             wechat = self.wechat
-            welcome_enabled = self.welcome_enabled
-            welcome_steps = self.welcome_steps
             if feishu is None or wechat is None:
                 logger.error("未初始化飞书/微信客户端，系统不能启动")
                 return
@@ -272,7 +270,10 @@ class TaskEngine:
                     continue
 
                 self._handle_apply_queue(feishu, wechat)
-                self._handle_welcome_queue(feishu, wechat, welcome_enabled, welcome_steps)
+                # 注意：不再调用 _handle_welcome_queue
+                # 被动监控 (_handle_passive_new_friends) 会自动处理：
+                #   - "已添加"的好友：匹配飞书记录 → 发送welcome → 更新为"已绑定"
+                #   - "等待验证"的好友：自动前往验证 → 发送welcome → 写入飞书"已绑定"
                 self.pause_event.wait(self.feishu_poll_interval)
         except Exception as exc:  # noqa: BLE001
             if not self.stop_event.is_set():
@@ -332,120 +333,141 @@ class TaskEngine:
                 logger.warning("记录缺少手机号，跳过 [{}]", record_id)
                 continue
 
+            # 一次搜索完成所有操作：判断好友 + 获取昵称 + 发送申请
             with self.wechat_lock:
-                relationship = wechat.check_relationship(phone)
-            logger.info("[申请队列] 手机:{}, 关系检测: {}", phone, relationship)
-            if relationship == "friend":
-                logger.info("{} 已经是好友，进入发送队列", phone)
-                feishu.update_status(record_id, "已申请")
-                self.apply_count += 1
-                continue
-            if relationship == "stranger":
-                with self.wechat_lock:
-                    apply_ok = wechat.apply_friend(phone)
-                if apply_ok:
-                    feishu.update_status(record_id, "已申请")
-                    self.apply_count += 1
-                else:
-                    logger.warning("申请发送失败 [{}]", phone)
-                    self.fail_count += 1
-                continue
-            if relationship == "not_found":
-                logger.warning('未在微信中找到 [{}]，标记为"未找到"', phone)
+                profile_win = wechat._search_and_open_profile(phone)
+
+            if not profile_win:
+                logger.warning("未找到 [{}] 的资料卡，标记为未找到", phone)
                 feishu.update_status(record_id, "未找到")
                 self.fail_count += 1
                 continue
-            logger.warning("无法确定 [{}] 关系状态，稍后重试", phone)
 
-    def _handle_welcome_queue(
+            try:
+                # 判断好友关系
+                relationship = wechat._detect_relationship_state([profile_win], timeout=2.0)
+                logger.info("[申请队列] 手机:{}, 关系检测: {}", phone, relationship)
+
+                if relationship == "friend":
+                    # 已经是好友，直接发送welcome并更新为"已绑定"
+                    logger.info("{} 已经是好友，直接发送welcome", phone)
+                    self._send_welcome_and_update(feishu, wechat, phone, None, record_id)
+                    self.apply_count += 1
+                    continue
+
+                if relationship == "stranger":
+                    # 获取昵称（从已打开的资料卡）
+                    nickname = wechat._extract_nickname_from_profile(profile_win)
+                    logger.info("[申请队列] 获取到昵称: {}", nickname)
+
+                    # 发送好友申请（资料卡已打开，直接点击添加）
+                    with self.wechat_lock:
+                        apply_ok = wechat._click_button(
+                            "添加到通讯录",
+                            timeout=2,
+                            search_depth=10,
+                            class_name="mmui::XOutlineButton"
+                        )
+                        if apply_ok:
+                            time.sleep(1)
+                            # 处理确认弹窗
+                            confirm_windows = ("申请添加朋友", "发送好友申请", "好友验证", "通过朋友验证")
+                            confirm_buttons = ("确定", "发送", "Send", "确定(&O)", "确定(&S)")
+                            wechat._handle_confirm_dialog(confirm_windows, confirm_buttons, timeout=8.0)
+
+                    if apply_ok:
+                        logger.info("[申请队列] {} 好友申请已发送，昵称: {}", phone, nickname)
+                        # 更新为"已申请"状态
+                        feishu.update_status(record_id, "已申请")
+                        # 将昵称写入飞书，方便后续被动监控通过昵称匹配
+                        if nickname:
+                            try:
+                                feishu.update_record(record_id, {"昵称": nickname})
+                                logger.info("[申请队列] 昵称已写入飞书: {}", nickname)
+                            except Exception as e:
+                                logger.warning("[申请队列] 写入昵称失败: {}", e)
+                        self.apply_count += 1
+                    else:
+                        logger.warning("申请发送失败 [{}]", phone)
+                        self.fail_count += 1
+                    continue
+
+                if relationship == "not_found":
+                    logger.warning('未在微信中找到 [{}]，标记为"未找到"', phone)
+                    feishu.update_status(record_id, "未找到")
+                    self.fail_count += 1
+                    continue
+
+                logger.warning("无法确定 [{}] 关系状态，稍后重试", phone)
+            finally:
+                # 关闭资料卡窗口
+                try:
+                    if profile_win.Exists(0):
+                        profile_win.SendKeys("{Esc}")
+                except Exception:
+                    pass
+
+    def _send_welcome_and_update(
         self,
         feishu: FeishuClient,
         wechat: WeChatRPA,
-        welcome_enabled: bool,
-        welcome_steps: List[Dict[str, str]],
+        phone: str,
+        name: str | None,
+        record_id: str
     ) -> None:
-        # 查询"已申请"（旧流程）和"未发送"（被动扫描新流程）的任务
-        tasks = feishu.fetch_tasks_by_status(["已申请", "未发送"])
-        if not tasks:
+        """
+        发送welcome并更新飞书状态。
+
+        Args:
+            feishu: 飞书客户端
+            wechat: 微信RPA
+            phone: 手机号/微信号
+            name: 姓名（可选）
+            record_id: 飞书记录ID
+        """
+        if not self.welcome_enabled or not self.welcome_steps:
+            # 没有启用welcome，直接更新状态
+            feishu.update_status(record_id, "已绑定")
             return
-        for item in tasks:
-            record_id = item.get("record_id") or item.get("recordId")
-            fields = item.get("fields", {})
-            phone, name = _extract_phone_and_name(fields)
-            if not phone:
-                logger.warning("记录缺少手机号，跳过 [{}]", record_id)
-                continue
 
+        search_keys = [phone]
+        if name:
+            search_keys.append(name)
+            search_keys.append(f"{phone}-{name}")
+
+        try:
             with self.wechat_lock:
-                relationship = wechat.check_relationship(phone)
-            logger.info("[欢迎队列] 手机:{}, 关系检测: {}", phone, relationship)
-            if relationship == "not_found":
-                logger.warning('[欢迎队列] {} 在微信中未找到记录，保持"已申请"待人工确认', phone)
-                self.fail_count += 1
-                continue
-            if relationship != "friend":
-                logger.debug("{} 尚未通过验证，等待下一轮", phone)
-                continue
+                send_ok = wechat.send_welcome_package(search_keys, self.welcome_steps)
+        except Exception as exc:  # noqa: BLE001
+            logger.warning("发送欢迎包异常 [{}]: {}", phone, exc)
+            send_ok = False
 
-            send_ok = True
-            if welcome_enabled and welcome_steps:
-                search_keys = [phone]
-                if name:
-                    search_keys.append(name)
-                    search_keys.append(f"{phone}-{name}")
-                try:
-                    with self.wechat_lock:
-                        send_ok = wechat.send_welcome_package(search_keys, welcome_steps)
-                except Exception as exc:  # noqa: BLE001
-                    logger.warning("发送欢迎包异常 [{}]: {}", phone, exc)
-                    send_ok = False
-
-            if send_ok:
-                feishu.update_status(record_id, "已绑定")
-                self.welcome_count += 1
-            else:
-                logger.warning('{} 欢迎消息发送失败，保持"已申请"供人工处理', phone)
-                self.fail_count += 1
+        if send_ok:
+            feishu.update_status(record_id, "已绑定")
+            self.welcome_count += 1
+        else:
+            logger.warning('[{}] welcome发送失败，保持原状态', phone)
+            self.fail_count += 1
 
     def _handle_passive_new_friends(self) -> None:
+        """
+        处理被动监控发现的新好友。
+
+        新流程：
+        1. 先处理'已添加'的好友
+           - 点击"发消息"发送welcome
+           - 删除好友记录
+        2. 再处理'等待验证'的好友
+           - 点击"前往验证" + "发消息"发送welcome
+           - 删除好友记录
+        """
         feishu = self.feishu
         wechat = self.wechat
         if feishu is None or wechat is None:
             return
 
         with self.wechat_lock:
-            # 使用新的通讯录扫描方法
-            contacts = wechat.scan_new_friends_via_contacts()
-            logger.debug("被动扫描完成，发现 {} 个新好友", len(contacts))
-
-        if not contacts:
-            return
-
-        for contact in contacts:
-            phone = (contact.get("wechat_id") or "").strip()
-            nickname = (contact.get("nickname") or "").strip()
-            remark = (contact.get("remark") or "").strip()
-            if not phone:
-                logger.debug("被动监听到的好友缺少微信号，跳过: {}", contact)
-                continue
-
-            try:
-                # 被动扫描发现的好友，写入飞书时状态为"未发送"
-                feishu.upsert_contact_profile(phone=phone, name=nickname, remark=remark, status="未发送")
-                logger.info("[被动同步] {} -> 已写入飞书，状态: 未发送", phone)
-            except requests.HTTPError as http_err:
-                logger.error("飞书API网络错误 [{}]: {} - 检查网络连接和API配置", phone, http_err)
-                # 网络错误暂时跳过，下次轮询可能恢复
-                continue
-            except RuntimeError as api_err:
-                logger.error("飞书API业务错误 [{}]: {} - 检查数据格式和权限", phone, api_err)
-                # API错误可能是数据问题，继续处理下一个
-                continue
-            except ValueError as data_err:
-                logger.warning("数据验证失败 [{}]: {} - 微信号可能无效", phone, data_err)
-                # 数据错误跳过该联系人
-                continue
-            except Exception as exc:  # noqa: BLE001
-                logger.error("未知错误 [{}]: {} - 建议检查系统状态", phone, exc)
-                # 未知错误记录但继续处理
-                continue
+            # 使用新的通讯录扫描方法（内部已完成welcome和删除）
+            count = wechat.scan_new_friends_via_contacts(feishu, self.welcome_enabled, self.welcome_steps)
+            if count > 0:
+                logger.info("[被动监控] 本次扫描共处理 {} 个新好友", count)
