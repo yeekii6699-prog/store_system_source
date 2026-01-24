@@ -4,10 +4,14 @@ UI 探测工具：实时输出鼠标位置控件信息
 """
 
 import time
+from typing import Any
+
 import uiautomation as auto
 
 
-def get_control_info(control: auto.Control, depth: int = 0) -> list:
+def get_control_info(
+    control: auto.Control, depth: int = 0
+) -> list[tuple[str, str, str, str, str]]:
     """递归收集控件信息"""
     results = []
 
@@ -87,7 +91,9 @@ def probe_mouse_position():
                 print("=" * 60)
 
                 for i, (ctrl_type, name, aid, cls, rect_str) in enumerate(all_controls):
-                    print(f"{i}: ('{ctrl_type}', '{name}', '{aid}', '{cls}', '{rect_str}')")
+                    print(
+                        f"{i}: ('{ctrl_type}', '{name}', '{aid}', '{cls}', '{rect_str}')"
+                    )
 
                 print("=" * 60)
 
@@ -120,8 +126,7 @@ def probe_window(window_name: str = "微信"):
     print("-" * 60)
 
     # 收集所有控件
-    all_controls = []
-    get_control_info(window, all_controls)
+    all_controls = get_control_info(window, 0)
 
     print(f"共收集到 {len(all_controls)} 个控件:")
     print("-" * 60)

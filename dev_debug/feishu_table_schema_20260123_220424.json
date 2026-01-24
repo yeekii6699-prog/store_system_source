@@ -1,0 +1,573 @@
+{
+  "generated_at": "2026-01-23T22:04:23",
+  "tables": [
+    {
+      "label": "profile_table",
+      "table_url": "https://ai.feishu.cn/wiki/UxtvwaKdfiJC36kXs0gcS13bnwb?table=tblnTC7FBZ8QKk6c&view=vew2abacZD",
+      "field_count": 16,
+      "fields": [
+        {
+          "field_id": "fldp8GK9C0",
+          "field_name": "手机号",
+          "type": 1,
+          "is_primary": true,
+          "property": null,
+          "description": null
+        },
+        {
+          "field_id": "fldDx1QNlA",
+          "field_name": "微信号",
+          "type": 1,
+          "is_primary": false,
+          "property": null,
+          "description": null
+        },
+        {
+          "field_id": "fldO9VqGlO",
+          "field_name": "昵称",
+          "type": 1,
+          "is_primary": false,
+          "property": null,
+          "description": null
+        },
+        {
+          "field_id": "fldGN2SL1z",
+          "field_name": "姓名",
+          "type": 1,
+          "is_primary": false,
+          "property": null,
+          "description": null
+        },
+        {
+          "field_id": "fld1kAZoG7",
+          "field_name": "微信绑定状态",
+          "type": 3,
+          "is_primary": false,
+          "property": {
+            "options": [
+              {
+                "color": 0,
+                "id": "optoCoOxfs",
+                "name": "待添加"
+              },
+              {
+                "color": 1,
+                "id": "optWkYndgZ",
+                "name": "已申请"
+              },
+              {
+                "color": 2,
+                "id": "optwVPiOxc",
+                "name": "已绑定"
+              },
+              {
+                "color": 5,
+                "id": "opt182497235",
+                "name": "未找到"
+              },
+              {
+                "color": 3,
+                "id": "opt31jzMmj",
+                "name": "周八"
+              },
+              {
+                "color": 4,
+                "id": "optbLUHIhh",
+                "name": "吴九"
+              },
+              {
+                "color": 6,
+                "id": "opt182396593",
+                "name": "未发送"
+              }
+            ]
+          },
+          "description": null
+        },
+        {
+          "field_id": "fldXqiY8df",
+          "field_name": "历史总单数",
+          "type": 19,
+          "is_primary": false,
+          "property": {
+            "filter_info": {
+              "conditions": {
+                "children": [
+                  {
+                    "field_id": "fldgP9yecC",
+                    "field_type": 3,
+                    "operator": "is",
+                    "value": null
+                  },
+                  {
+                    "field_id": "fldPWJi3hm",
+                    "field_type": 21,
+                    "operator": "is",
+                    "value": null
+                  }
+                ],
+                "conjunction": "and"
+              },
+              "target_table": "tblHwp8cJOWRL0Oz"
+            },
+            "formatter": "0",
+            "formula": "bitable::$table[tblHwp8cJOWRL0Oz].FILTER(CurrentValue.$column[fldgP9yecC]=bitable::$table[tblHwp8cJOWRL0Oz].$column[fldgP9yecC].$option[optGZOeM47]&&CurrentValue.$column[fldPWJi3hm]=bitable::$table[tblnTC7FBZ8QKk6c].$field[fldp8GK9C0]).$column[fldZnrpw4e].LISTCOMBINE().COUNTA()",
+            "roll_up": 2,
+            "target_field": "fldZnrpw4e"
+          },
+          "description": null
+        },
+        {
+          "field_id": "fldmsHlZvD",
+          "field_name": "最近到店日期",
+          "type": 5,
+          "is_primary": false,
+          "property": {
+            "auto_fill": true,
+            "date_formatter": "yyyy/MM/dd"
+          },
+          "description": null
+        },
+        {
+          "field_id": "fldtm0hX2i",
+          "field_name": "客户标签",
+          "type": 20,
+          "is_primary": false,
+          "property": {
+            "formatter": "",
+            "formula_expression": "IF(bitable::$table[tblnTC7FBZ8QKk6c].$field[fldXqiY8df] > 0, \"💎 老顾客\", \"🌱 新客\")"
+          },
+          "description": null
+        },
+        {
+          "field_id": "fldpEpCPiE",
+          "field_name": "沉睡预警",
+          "type": 20,
+          "is_primary": false,
+          "property": {
+            "formatter": "",
+            "formula_expression": "IF(DAYS(TODAY(),bitable::$table[tblnTC7FBZ8QKk6c].$field[fldmsHlZvD])>30,\"需唤醒\",\"正常\")"
+          },
+          "description": null
+        },
+        {
+          "field_id": "fld7F5heUT",
+          "field_name": "预约流水表",
+          "type": 21,
+          "is_primary": false,
+          "property": {
+            "back_field_id": "fldPWJi3hm",
+            "back_field_name": "手机号",
+            "multiple": true,
+            "table_id": "tblHwp8cJOWRL0Oz",
+            "table_name": "预约流水表"
+          },
+          "description": null
+        },
+        {
+          "field_id": "fldTSaom9r",
+          "field_name": "添加日期",
+          "type": 5,
+          "is_primary": false,
+          "property": {
+            "auto_fill": true,
+            "date_formatter": "yyyy/MM/dd"
+          },
+          "description": null
+        },
+        {
+          "field_id": "fldutgwoCY",
+          "field_name": "会员等级",
+          "type": 4,
+          "is_primary": false,
+          "property": {
+            "options": [
+              {
+                "color": 0,
+                "id": "optswHmJTj",
+                "name": "体验卡"
+              },
+              {
+                "color": 1,
+                "id": "optKOCEsLc",
+                "name": "699"
+              },
+              {
+                "color": 2,
+                "id": "optlWHx0ON",
+                "name": "1099"
+              },
+              {
+                "color": 3,
+                "id": "optkAkabDm",
+                "name": "散客"
+              }
+            ]
+          },
+          "description": null
+        },
+        {
+          "field_id": "fldY4ZyAeZ",
+          "field_name": "来源渠道",
+          "type": 3,
+          "is_primary": false,
+          "property": {
+            "options": [
+              {
+                "color": 0,
+                "id": "optjUouE5K",
+                "name": "抖音"
+              },
+              {
+                "color": 1,
+                "id": "opto10YTHK",
+                "name": "美团"
+              },
+              {
+                "color": 2,
+                "id": "opts7vMD01",
+                "name": "大众点评"
+              },
+              {
+                "color": 3,
+                "id": "optLzSKy2a",
+                "name": "朋友介绍"
+              },
+              {
+                "color": 4,
+                "id": "optSZeaPY3",
+                "name": "自然进店"
+              },
+              {
+                "color": 5,
+                "id": "opt7n4Qyl0",
+                "name": "40"
+              },
+              {
+                "color": 6,
+                "id": "optjzAyUog",
+                "name": "55"
+              }
+            ]
+          },
+          "description": null
+        },
+        {
+          "field_id": "fldoMxi18K",
+          "field_name": "累计消费总额",
+          "type": 2,
+          "is_primary": false,
+          "property": {
+            "formatter": "0.0"
+          },
+          "description": null
+        },
+        {
+          "field_id": "fldvWchLow",
+          "field_name": "备注",
+          "type": 1,
+          "is_primary": false,
+          "property": null,
+          "description": null
+        },
+        {
+          "field_id": "fldC5KNzv0",
+          "field_name": "是否今日添加",
+          "type": 20,
+          "is_primary": false,
+          "property": {
+            "formatter": "0",
+            "formula_expression": "IF(bitable::$table[tblnTC7FBZ8QKk6c].$field[fldTSaom9r]=TODAY(),1,0)",
+            "type": {
+              "data_type": 2,
+              "ui_property": {
+                "formatter": "0"
+              },
+              "ui_type": "Number"
+            }
+          },
+          "description": null
+        }
+      ]
+    },
+=============================
+    {
+      "label": "appointment_table",
+      "table_url": "https://ai.feishu.cn/wiki/UxtvwaKdfiJC36kXs0gcS13bnwb?table=tblHwp8cJOWRL0Oz&view=vewQKz2QrU",
+      "field_count": 18,
+      "fields": [
+        {
+          "field_id": "fldZnrpw4e",
+          "field_name": "预约编号",
+          "type": 1005,
+          "is_primary": true,
+          "property": {
+            "auto_serial": {
+              "type": "auto_increment_number"
+            }
+          },
+          "description": null
+        },
+        {
+          "field_id": "fldPWJi3hm",
+          "field_name": "手机号",
+          "type": 21,
+          "is_primary": false,
+          "property": {
+            "back_field_id": "fld7F5heUT",
+            "back_field_name": "预约流水表",
+            "multiple": true,
+            "table_id": "tblnTC7FBZ8QKk6c",
+            "table_name": "客户档案表"
+          },
+          "description": null
+        },
+        {
+          "field_id": "fldlTgC7Hn",
+          "field_name": "预约时间✅",
+          "type": 5,
+          "is_primary": false,
+          "property": {
+            "auto_fill": true,
+            "date_formatter": "yyyy/MM/dd HH:mm"
+          },
+          "description": null
+        },
+        {
+          "field_id": "fldnsrSarH",
+          "field_name": "开始时间",
+          "type": 5,
+          "is_primary": false,
+          "property": {
+            "auto_fill": false,
+            "date_formatter": "yyyy/MM/dd HH:mm"
+          },
+          "description": null
+        },
+        {
+          "field_id": "fldVxZ8fkN",
+          "field_name": "服务项目✅",
+          "type": 18,
+          "is_primary": false,
+          "property": {
+            "multiple": true,
+            "table_id": "tbl5TrKqgaHuECRT",
+            "table_name": ""
+          },
+          "description": null
+        },
+        {
+          "field_id": "fldNwECorJ",
+          "field_name": "预计耗时",
+          "type": 19,
+          "is_primary": false,
+          "property": {
+            "filter_info": {
+              "conditions": {
+                "children": [
+                  {
+                    "field_id": "fld8X691w3",
+                    "field_type": 1,
+                    "operator": "is",
+                    "value": null
+                  }
+                ],
+                "conjunction": "and"
+              },
+              "target_table": "tbl5TrKqgaHuECRT"
+            },
+            "formatter": "0",
+            "formula": "bitable::$table[tbl5TrKqgaHuECRT].FILTER(CurrentValue.$column[fld8X691w3]=bitable::$table[tblHwp8cJOWRL0Oz].$field[fldVxZ8fkN]).$column[fldJuyLWzD].LISTCOMBINE()",
+            "roll_up": 0,
+            "target_field": "fldJuyLWzD"
+          },
+          "description": null
+        },
+        {
+          "field_id": "fldMjXNd5E",
+          "field_name": "实际耗时",
+          "type": 2,
+          "is_primary": false,
+          "property": {
+            "formatter": "0"
+          },
+          "description": null
+        },
+        {
+          "field_id": "fldnWVSALV",
+          "field_name": "计划结束时间",
+          "type": 20,
+          "is_primary": false,
+          "property": {
+            "formatter": "yyyy/MM/dd HH:mm",
+            "formula_expression": "bitable::$table[tblHwp8cJOWRL0Oz].$field[fldlTgC7Hn] + DURATION(0,0, bitable::$table[tblHwp8cJOWRL0Oz].$field[fldNwECorJ])",
+            "type": {
+              "data_type": 5,
+              "ui_property": {
+                "date_formatter": "yyyy/MM/dd HH:mm"
+              },
+              "ui_type": "DateTime"
+            }
+          },
+          "description": null
+        },
+        {
+          "field_id": "fldWZp9s7p",
+          "field_name": "实际结束时间",
+          "type": 5,
+          "is_primary": false,
+          "property": {
+            "auto_fill": false,
+            "date_formatter": "yyyy/MM/dd HH:mm"
+          },
+          "description": ""
+        },
+        {
+          "field_id": "fldE1eohKf",
+          "field_name": "最终锁定时间",
+          "type": 20,
+          "is_primary": false,
+          "property": {
+            "formatter": "yyyy/MM/dd HH:mm",
+            "formula_expression": "IF(bitable::$table[tblHwp8cJOWRL0Oz].$field[fldWZp9s7p] != \"\", bitable::$table[tblHwp8cJOWRL0Oz].$field[fldWZp9s7p], bitable::$table[tblHwp8cJOWRL0Oz].$field[fldnWVSALV])",
+            "type": {
+              "data_type": 5,
+              "ui_property": {
+                "date_formatter": "yyyy/MM/dd HH:mm"
+              },
+              "ui_type": "DateTime"
+            }
+          },
+          "description": null
+        },
+        {
+          "field_id": "fldp0Y77cq",
+          "field_name": "服务技师✅",
+          "type": 21,
+          "is_primary": false,
+          "property": {
+            "back_field_id": "fldu6KIZZd",
+            "back_field_name": "预约流水表",
+            "multiple": false,
+            "table_id": "tbl2l5NRSRp36PYO",
+            "table_name": "人员排班表"
+          },
+          "description": null
+        },
+        {
+          "field_id": "fldgP9yecC",
+          "field_name": "当前状态✅",
+          "type": 3,
+          "is_primary": false,
+          "property": {
+            "options": [
+              {
+                "color": 0,
+                "id": "optLY2LDfc",
+                "name": "📅已预约"
+              },
+              {
+                "color": 1,
+                "id": "opt9aSdUwP",
+                "name": "🏃服务中"
+              },
+              {
+                "color": 2,
+                "id": "optGZOeM47",
+                "name": "✅已完成"
+              },
+              {
+                "color": 3,
+                "id": "optYLTrgCm",
+                "name": "❌已取消"
+              }
+            ]
+          },
+          "description": "进行和完成需要手动操作"
+        },
+        {
+          "field_id": "fldGHQyLoY",
+          "field_name": "手机号（录入）",
+          "type": 1,
+          "is_primary": false,
+          "property": null,
+          "description": null
+        },
+        {
+          "field_id": "fldzQIdNwe",
+          "field_name": "备注",
+          "type": 1,
+          "is_primary": false,
+          "property": null,
+          "description": null
+        },
+        {
+          "field_id": "fldi0CpxzO",
+          "field_name": "客群身份",
+          "type": 19,
+          "is_primary": false,
+          "property": {
+            "filter_info": {
+              "conditions": {
+                "children": [
+                  {
+                    "field_id": "fldp8GK9C0",
+                    "field_type": 1,
+                    "operator": "is",
+                    "value": null
+                  }
+                ],
+                "conjunction": "and"
+              },
+              "target_table": "tblnTC7FBZ8QKk6c"
+            },
+            "formatter": "",
+            "formula": "bitable::$table[tblnTC7FBZ8QKk6c].FILTER(CurrentValue.$column[fldp8GK9C0]=bitable::$table[tblHwp8cJOWRL0Oz].$field[fldPWJi3hm]).$column[fldtm0hX2i].LISTCOMBINE()",
+            "roll_up": 0,
+            "target_field": "fldtm0hX2i"
+          },
+          "description": null
+        },
+        {
+          "field_id": "fldtzKjVwR",
+          "field_name": "是否今日单",
+          "type": 20,
+          "is_primary": false,
+          "property": {
+            "formatter": "0",
+            "formula_expression": "IF(AND(TEXT(bitable::$table[tblHwp8cJOWRL0Oz].$field[fldlTgC7Hn],\"YYYY/MM/DD\")=TEXT(TODAY(),\"YYYY/MM/DD\"),bitable::$table[tblHwp8cJOWRL0Oz].$field[fldgP9yecC]!=\"❌已取消\",bitable::$table[tblHwp8cJOWRL0Oz].$field[fldgP9yecC]!=\"🕊️爽约\"),1,0)",
+            "type": {
+              "data_type": 2,
+              "ui_property": {
+                "formatter": "0"
+              },
+              "ui_type": "Number"
+            }
+          },
+          "description": null
+        },
+        {
+          "field_id": "fld4Nbr6JT",
+          "field_name": "预约日期",
+          "type": 5,
+          "is_primary": false,
+          "property": {
+            "auto_fill": true,
+            "date_formatter": "yyyy/MM/dd"
+          },
+          "description": null
+        },
+        {
+          "field_id": "fldLdnSaDG",
+          "field_name": "节省人工时长",
+          "type": 2,
+          "is_primary": false,
+          "property": {
+            "formatter": "0"
+          },
+          "description": null
+        }
+      ]
+    }
+  ]
+}
