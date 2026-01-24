@@ -17,14 +17,15 @@ import requests
 
 # ============== 需要按实际部署修改的常量 ==============
 CURRENT_VERSION = "0.0.1"
-VERSION_URL = "https://gitee.com/yeekii77/store_system/raw/master/version.txt"  # 远程版本号文本文件
-ZIP_URL = "https://gitee.com/yeekii77/store_system/releases/download/1.1.0/main_bot.zip"  # 默认压缩包下载地址（回退用）
-
 # 支持环境变量覆盖
-if os.environ.get("VERSION_URL"):
-    VERSION_URL = os.environ["VERSION_URL"]
-if os.environ.get("ZIP_URL"):
-    ZIP_URL = os.environ["ZIP_URL"]
+VERSION_URL = (
+    os.environ.get("VERSION_URL")
+    or "https://gitee.com/yeekii77/store_system/raw/master/version.txt"
+)
+ZIP_URL = (
+    os.environ.get("ZIP_URL")
+    or "https://gitee.com/yeekii77/store_system/releases/download/1.1.0/main_bot.zip"
+)
 HEADERS = {
     "User-Agent": (
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
@@ -38,9 +39,10 @@ LOCAL_VERSION_FILE = "local_version.txt"
 
 # ============== 路径处理 ==============
 if getattr(sys, "frozen", False):
-    BASE_DIR = Path(sys.executable).resolve().parent
+    _base_dir = Path(sys.executable).resolve().parent
 else:
-    BASE_DIR = Path(__file__).resolve().parent
+    _base_dir = Path(__file__).resolve().parent
+BASE_DIR = _base_dir
 
 TARGET_EXE_PATH = BASE_DIR / TARGET_EXE_NAME
 BACKUP_EXE_PATH = BASE_DIR / BACKUP_EXE_NAME
@@ -63,7 +65,10 @@ def _is_remote_newer(remote: str, local: str) -> bool:
 def read_local_version() -> str:
     if LOCAL_VERSION_PATH.exists():
         try:
-            return LOCAL_VERSION_PATH.read_text(encoding="utf-8").strip() or CURRENT_VERSION
+            return (
+                LOCAL_VERSION_PATH.read_text(encoding="utf-8").strip()
+                or CURRENT_VERSION
+            )
         except Exception:
             return CURRENT_VERSION
     return CURRENT_VERSION
@@ -90,7 +95,9 @@ def _parse_version_and_url(text: str) -> tuple[str, str | None]:
 
 def fetch_remote_version() -> tuple[str, str | None]:
     try:
-        resp = requests.get(VERSION_URL, timeout=10, headers=HEADERS, allow_redirects=True)
+        resp = requests.get(
+            VERSION_URL, timeout=10, headers=HEADERS, allow_redirects=True
+        )
         resp.raise_for_status()
         return _parse_version_and_url(resp.text)
     except Exception as exc:  # noqa: BLE001
@@ -100,7 +107,9 @@ def fetch_remote_version() -> tuple[str, str | None]:
 
 def download_new_zip(url: str) -> Path | None:
     try:
-        resp = requests.get(url, stream=True, timeout=60, headers=HEADERS, allow_redirects=True)
+        resp = requests.get(
+            url, stream=True, timeout=60, headers=HEADERS, allow_redirects=True
+        )
         resp.raise_for_status()
         fd, tmp_path = tempfile.mkstemp(prefix="main_bot_", suffix=".zip")
         with os.fdopen(fd, "wb") as tmp_file:
@@ -141,7 +150,9 @@ def _extract_exe_from_zip(zip_path: Path) -> tuple[Path, Path] | None:
         return None
 
 
-def _replace_with_retry(new_exe: Path, target_path: Path, retries: int = 3, delay: float = 1.5) -> bool:
+def _replace_with_retry(
+    new_exe: Path, target_path: Path, retries: int = 3, delay: float = 1.5
+) -> bool:
     """
     将 new_exe 覆盖到 target_path，带简单重试，防止文件占用导致失败。
     """

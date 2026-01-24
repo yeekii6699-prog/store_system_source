@@ -2,3 +2,4 @@ requests
 uiautomation
 loguru
 python-dotenv
+flet
