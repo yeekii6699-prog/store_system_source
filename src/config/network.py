@@ -7,15 +7,19 @@ from __future__ import annotations
 
 import os
 import sys
-from typing import Dict, Any, Optional, Tuple
+from typing import TYPE_CHECKING, Dict, Any, Optional, Tuple
 from loguru import logger
+from urllib.parse import urlparse
 
 try:
     import requests
     from requests.adapters import HTTPAdapter
-    import urllib.parse
 except ImportError:
     requests = None
+    HTTPAdapter = None
+
+if TYPE_CHECKING:
+    from requests import Session
 
 from .settings import get_config
 
@@ -25,7 +29,19 @@ class NetworkConfig:
 
     def __init__(self):
         self._load_config()
-        self._detect_network_environment()
+        self.system_proxy: Dict[str, str] = {}
+        self.has_vpn = False
+        self._detected = False
+
+    def reload(self) -> None:
+        """重新加载配置并刷新网络环境检测。"""
+        self._load_config()
+        self._detected = False
+
+    def _ensure_detected(self) -> None:
+        if not self._detected:
+            self._detect_network_environment()
+            self._detected = True
 
     def _load_config(self) -> None:
         """加载网络配置"""
@@ -51,8 +67,11 @@ class NetworkConfig:
         """获取系统代理设置"""
         try:
             import urllib.request
+
             proxies = urllib.request.getproxies()
-            return {k: v for k, v in proxies.items() if v and k.lower() in ('http', 'https')}
+            return {
+                k: v for k, v in proxies.items() if v and k.lower() in ("http", "https")
+            }
         except Exception as e:
             logger.debug("获取系统代理失败: {}", e)
             return {}
@@ -66,21 +85,22 @@ class NetworkConfig:
             os.getenv("ALL_PROXY"),
             os.getenv("http_proxy"),
             os.getenv("https_proxy"),
-            self.proxy_url  # 配置的代理
+            self.proxy_url,  # 配置的代理
         ]
 
         return any(indicator for indicator in vpn_indicators if indicator)
 
     def get_proxies(self) -> Optional[Dict[str, str]]:
         """获取请求使用的代理配置"""
+        self._ensure_detected()
         proxies = {}
 
         # 优先使用手动配置的代理
         if self.proxy_url:
-            parsed = urllib.parse.urlparse(self.proxy_url)
+            parsed = urlparse(self.proxy_url)
             if parsed.scheme:
-                proxies['http'] = self.proxy_url
-                proxies['https'] = self.proxy_url
+                proxies["http"] = self.proxy_url
+                proxies["https"] = self.proxy_url
                 logger.info("使用配置的代理: {}", self.proxy_url)
                 return proxies
 
@@ -94,6 +114,7 @@ class NetworkConfig:
 
     def get_ssl_config(self) -> Dict[str, Any]:
         """获取SSL配置"""
+        self._ensure_detected()
         if not self.verify_ssl:
             logger.warning("⚠️ SSL证书验证已禁用，连接可能不安全")
             return {"verify": False}
@@ -110,29 +131,33 @@ class NetworkConfig:
 
     def get_timeout_config(self) -> Tuple[int, int]:
         """获取超时配置（连接超时，读取超时）"""
+        self._ensure_detected()
         base_timeout = max(5, self.timeout)  # 最少5秒
         # VPN环境下增加超时时间
         if self.has_vpn:
-            return (base_timeout, base_timeout * 2)
-        return (base_timeout, base_timeout * 1.5)
+            return (int(base_timeout), int(base_timeout * 2))
+        return (int(base_timeout), int(base_timeout * 1.5))
 
     def get_session_config(self) -> Dict[str, Any]:
         """获取完整的session配置"""
         return {
             "timeout": self.get_timeout_config(),
             "proxies": self.get_proxies(),
-            **self.get_ssl_config()
+            **self.get_ssl_config(),
         }
 
-    def create_session(self) -> "requests.Session":
+    def create_session(self) -> Any:
         """创建预配置的requests.Session"""
         if not requests:
             raise ImportError("requests模块未安装")
+        if not HTTPAdapter:
+            raise ImportError("HTTPAdapter未安装")
+        self._ensure_detected()
 
         session = requests.Session()
 
-        # 设置超时
-        session.timeout = self.get_timeout_config()
+        # 保存超时配置，用于后续请求
+        timeout_config = self.get_timeout_config()
 
         # 设置代理
         proxies = self.get_proxies()
@@ -145,26 +170,30 @@ class NetworkConfig:
 
         # 配置适配器
         adapter = HTTPAdapter(
-            max_retries=3,
-            pool_connections=10,
-            pool_maxsize=10,
-            pool_block=False
+            max_retries=3, pool_connections=10, pool_maxsize=10, pool_block=False
         )
-        session.mount('http://', adapter)
-        session.mount('https://', adapter)
+        session.mount("http://", adapter)
+        session.mount("https://", adapter)
 
-        logger.debug("创建网络会话: 超时={}, 代理={}, SSL验证={}",
-                    session.timeout, bool(proxies), session.verify)
+        logger.debug(
+            "创建网络会话: 超时={}, 代理={}, SSL验证={}",
+            timeout_config,
+            bool(proxies),
+            session.verify,
+        )
 
         return session
 
     def test_connection(self, url: str = "https://open.feishu.cn") -> bool:
         """测试网络连接"""
         try:
+            self._ensure_detected()
             session = self.create_session()
             response = session.get(url, timeout=10)
             response.raise_for_status()
-            logger.info("✅ 网络连接测试成功: {} (状态码: {})", url, response.status_code)
+            logger.info(
+                "✅ 网络连接测试成功: {} (状态码: {})", url, response.status_code
+            )
             return True
         except Exception as e:
             logger.error("❌ 网络连接测试失败: {} - {}", url, e)
@@ -172,13 +201,14 @@ class NetworkConfig:
 
     def get_network_info(self) -> Dict[str, Any]:
         """获取当前网络环境信息"""
+        self._ensure_detected()
         return {
             "has_vpn": self.has_vpn,
             "system_proxy": self.system_proxy,
             "configured_proxy": self.proxy_url,
             "verify_ssl": self.verify_ssl,
             "timeout": self.timeout,
-            "use_system_proxy": self.use_system_proxy
+            "use_system_proxy": self.use_system_proxy,
         }
 
 
