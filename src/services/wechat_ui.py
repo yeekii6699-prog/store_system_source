@@ -9,17 +9,15 @@ import time
 import struct
 import ctypes
 import random
+from datetime import datetime
 from pathlib import Path
-from typing import Optional, List, Any, TYPE_CHECKING
+from typing import Optional, Sequence, List, Any, cast
 
 import uiautomation as auto
 from loguru import logger
 
-from ..config.settings import get_config
-
-if TYPE_CHECKING:
-    from .wechat import WeChatRPA
-
+from ..config.logger import push_feishu_screenshot
+from ..config.settings import BASE_DIR, get_config
 
 # 依赖检查
 try:
@@ -42,7 +40,7 @@ class WeChatUIOperations:
 
     WINDOW_NAME = "微信"
 
-    def __init__(self, owner: "WeChatRPA" | None = None):
+    def __init__(self, owner: Any = None):
         """
         初始化UI操作类
 
@@ -58,7 +56,9 @@ class WeChatUIOperations:
 
     # ====================== 窗口操作 ======================
 
-    def _get_window(self, name: str = "", class_name: str = "", search_depth: int = 1) -> Optional[Any]:
+    def _get_window(
+        self, name: str = "", class_name: str = "", search_depth: int = 1
+    ) -> auto.WindowControl:
         """
         获取微信窗口控件
 
@@ -79,27 +79,66 @@ class WeChatUIOperations:
 
     def _activate_window(self) -> bool:
         """强制激活微信窗口到前台"""
-        win = self._get_window(self.WINDOW_NAME)
+        win = self._get_window(self.WINDOW_NAME, search_depth=5)
         if not win.Exists(0, 0):
             if self.exec_path:
                 import subprocess
+
                 subprocess.Popen(self.exec_path)
-                time.sleep(3)
-                win = self._get_window(self.WINDOW_NAME)
+                # 等待窗口出现，最多等待 15 秒
+                for _ in range(15):
+                    time.sleep(1)
+                    win = self._get_window(self.WINDOW_NAME, search_depth=5)
+                    if win.Exists(0, 0):
+                        break
+                else:
+                    logger.error("启动微信后等待超时，未找到窗口")
+                    self._report_wechat_not_found("启动微信后等待超时，未找到窗口")
+                    return False
             else:
                 logger.error("未找到微信窗口且未配置启动路径")
+                self._report_wechat_not_found("未找到微信窗口且未配置启动路径")
                 return False
 
-        win.SetActive()
-        win.SetFocus()
+        # 激活窗口，带错误处理
+        try:
+            win.SetActive()
+        except Exception as e:
+            logger.warning("SetActive 失败: {}", e)
+
+        try:
+            win.SetFocus()
+        except Exception as e:
+            logger.warning("SetFocus 失败: {}", e)
+
         return True
+
+    def _report_wechat_not_found(self, reason: str) -> None:
+        try:
+            from PIL import ImageGrab
+        except Exception:
+            logger.error("截图失败，缺少 Pillow")
+            return
+
+        logs_dir = BASE_DIR / "logs"
+        logs_dir.mkdir(parents=True, exist_ok=True)
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        image_path = logs_dir / f"wechat_missing_{timestamp}.png"
+        try:
+            image = ImageGrab.grab()
+            image.save(image_path, "PNG")
+        except Exception as exc:
+            logger.error("截图失败: {}", exc)
+            return
+
+        push_feishu_screenshot(reason, image_path)
 
     def _wait_for_window(
         self,
         name: str = "",
         class_name: str = "",
         timeout: float = 5.0,
-        search_depth: int = 3
+        search_depth: int = 3,
     ) -> Optional[Any]:
         """
         等待指定窗口出现
@@ -130,7 +169,7 @@ class WeChatUIOperations:
         name: str,
         timeout: float = 3.0,
         search_depth: int = 15,
-        class_name: str = ""
+        class_name: str = "",
     ) -> bool:
         """
         通用按钮点击方法
@@ -160,10 +199,7 @@ class WeChatUIOperations:
             return False
 
     def _click_button_by_name_contains(
-        self,
-        name_contains: str,
-        timeout: float = 3.0,
-        search_depth: int = 15
+        self, name_contains: str, timeout: float = 3.0, search_depth: int = 15
     ) -> bool:
         """
         点击名称包含指定字符串的按钮
@@ -181,7 +217,8 @@ class WeChatUIOperations:
             return False
 
         try:
-            for ctrl in main_win.GetDescendants():
+            main_win_any = cast(Any, main_win)
+            for ctrl in main_win_any.GetDescendants():
                 try:
                     if getattr(ctrl, "ControlTypeName", "") == "ButtonControl":
                         ctrl_name = getattr(ctrl, "Name", "") or ""
@@ -199,11 +236,7 @@ class WeChatUIOperations:
 
     # ====================== 列表项操作 ======================
 
-    def _find_list_item(
-        self,
-        name: str,
-        search_depth: int = 15
-    ) -> Optional[Any]:
+    def _find_list_item(self, name: str, search_depth: int = 15) -> Optional[Any]:
         """
         查找列表项
 
@@ -220,10 +253,7 @@ class WeChatUIOperations:
             return None
 
     def _find_and_click_list_item(
-        self,
-        name: str,
-        timeout: float = 2.0,
-        search_depth: int = 15
+        self, name: str, timeout: float = 2.0, search_depth: int = 15
     ) -> bool:
         """
         查找并点击列表项
@@ -246,11 +276,7 @@ class WeChatUIOperations:
 
     # ====================== 对话框处理 ======================
 
-    def _handle_dialog(
-        self,
-        button_names: List[str],
-        timeout: float = 5.0
-    ) -> bool:
+    def _handle_dialog(self, button_names: Sequence[str], timeout: float = 5.0) -> bool:
         """
         处理对话框，点击指定的按钮之一
 
@@ -270,9 +296,9 @@ class WeChatUIOperations:
 
     def _handle_confirm_dialog(
         self,
-        window_names: List[str],
-        button_names: List[str],
-        timeout: float = 8.0
+        window_names: Sequence[str],
+        button_names: Sequence[str],
+        timeout: float = 8.0,
     ) -> bool:
         """
         处理确认对话框，查找指定窗口并点击按钮
@@ -295,7 +321,11 @@ class WeChatUIOperations:
                         btn = win.ButtonControl(Name=btn_name, searchDepth=8)
                         if btn.Exists(0):
                             btn.Click()
-                            logger.debug("确认对话框：窗口[{}] 点击按钮[{}] 成功", win_name, btn_name)
+                            logger.debug(
+                                "确认对话框：窗口[{}] 点击按钮[{}] 成功",
+                                win_name,
+                                btn_name,
+                            )
                             # 等待窗口关闭
                             end_close = time.time() + 2
                             while win.Exists(0) and time.time() < end_close:
@@ -314,10 +344,7 @@ class WeChatUIOperations:
     # ====================== 控件查找 ======================
 
     def _find_control(
-        self,
-        control_type: type,
-        name: str = "",
-        **kwargs
+        self, control_type: type, name: str = "", **kwargs
     ) -> Optional[Any]:
         """
         通用控件查找方法
@@ -341,7 +368,7 @@ class WeChatUIOperations:
         self,
         automation_id: str,
         control_type: type = auto.Control,
-        search_depth: int = 20
+        search_depth: int = 20,
     ) -> Optional[Any]:
         """
         通过 AutomationId 查找控件
@@ -360,10 +387,7 @@ class WeChatUIOperations:
             return None
 
     def _find_controls_by_class_name(
-        self,
-        class_name: str,
-        control_type: type = auto.Control,
-        search_depth: int = 15
+        self, class_name: str, control_type: type = auto.Control, search_depth: int = 15
     ) -> List[Any]:
         """
         通过 ClassName 查找所有匹配的控件
@@ -382,11 +406,16 @@ class WeChatUIOperations:
             return results
 
         try:
-            for ctrl in main_win.GetDescendants():
+            main_win_any = cast(Any, main_win)
+            for ctrl in main_win_any.GetDescendants():
                 try:
                     ctrl_class = getattr(ctrl, "ClassName", "") or ""
                     if class_name in ctrl_class:
-                        if control_type is auto.Control or getattr(ctrl, "ControlTypeName", "") == control_type.__name__:
+                        if (
+                            control_type is auto.Control
+                            or getattr(ctrl, "ControlTypeName", "")
+                            == control_type.__name__
+                        ):
                             results.append(ctrl)
                 except Exception:
                     continue
@@ -395,10 +424,7 @@ class WeChatUIOperations:
         return results
 
     def _find_control_by_name(
-        self,
-        parent: Any,
-        name: str,
-        control_type: str
+        self, parent: Any, name: str, control_type: str
     ) -> Optional[Any]:
         """
         在父控件下查找指定名称和类型的控件
@@ -417,16 +443,25 @@ class WeChatUIOperations:
 
             matching_controls = []
             for control in all_controls:
-                if (control.ControlTypeName == control_type and
-                    control.Name and name in control.Name):
+                if (
+                    control.ControlTypeName == control_type
+                    and control.Name
+                    and name in control.Name
+                ):
                     matching_controls.append(control)
 
             if matching_controls:
                 best_control = matching_controls[0]
                 rect = best_control.BoundingRectangle
-                logger.debug("找到'{}'控件: {} 位置({},{}) 大小{}x{}",
-                           name, best_control.ControlTypeName,
-                           rect.left, rect.top, rect.width(), rect.height())
+                logger.debug(
+                    "找到'{}'控件: {} 位置({},{}) 大小{}x{}",
+                    name,
+                    best_control.ControlTypeName,
+                    rect.left,
+                    rect.top,
+                    rect.width(),
+                    rect.height(),
+                )
                 return best_control
 
             logger.debug("未找到名称为'{}'的{}控件", name, control_type)
@@ -438,20 +473,22 @@ class WeChatUIOperations:
     def _collect_all_controls(
         self,
         parent: Any,
-        controls_list: list,
+        controls_list: list[Any],
         max_depth: int = 10,
-        current_depth: int = 0
+        current_depth: int = 0,
     ) -> None:
         """递归收集所有控件"""
         if current_depth >= max_depth:
             return
 
         try:
-            if hasattr(parent, 'GetChildren'):
+            if hasattr(parent, "GetChildren"):
                 children = parent.GetChildren()
                 for child in children:
                     controls_list.append(child)
-                    self._collect_all_controls(child, controls_list, max_depth, current_depth + 1)
+                    self._collect_all_controls(
+                        child, controls_list, max_depth, current_depth + 1
+                    )
         except Exception:
             pass
 
@@ -529,7 +566,7 @@ class WeChatUIOperations:
             auto.SendKeys("{Ctrl}v")
         else:
             auto.SendKeys(text)
-        time.sleep(0.3)
+        self._random_delay()
         auto.SendKeys("{Enter}")
 
     def _send_image(self, image_path: str) -> bool:
@@ -544,7 +581,7 @@ class WeChatUIOperations:
         """
         if self._copy_image_to_clipboard(image_path):
             auto.SendKeys("{Ctrl}v")
-            time.sleep(0.8)
+            self._random_delay()
             auto.SendKeys("{Enter}")
             return True
         return False
@@ -557,7 +594,22 @@ class WeChatUIOperations:
             return str(keyword[0]) if len(keyword) > 0 else ""
         return str(keyword)
 
-    def _random_delay(self, min_sec: float = 0.5, max_sec: float = 1.5) -> None:
+    def _random_delay(
+        self, min_sec: float | None = None, max_sec: float | None = None
+    ) -> None:
         """随机延迟，防止操作过快被风控"""
-        delay = random.uniform(min_sec, max_sec)
+        resolved_min = min_sec
+        resolved_max = max_sec
+        if self._owner:
+            resolved_min = (
+                self._owner.rpa_delay_min if resolved_min is None else resolved_min
+            )
+            resolved_max = (
+                self._owner.rpa_delay_max if resolved_max is None else resolved_max
+            )
+        if resolved_min is None:
+            resolved_min = 0.5
+        if resolved_max is None:
+            resolved_max = 1.5
+        delay = random.uniform(resolved_min, resolved_max)
         time.sleep(delay)

@@ -7,13 +7,11 @@ from __future__ import annotations
 
 import re
 import time
-from typing import Optional, List, Any, TYPE_CHECKING
+import typing
+from typing import Optional, List, Any
 
 import uiautomation as auto
 from loguru import logger
-
-if TYPE_CHECKING:
-    from .wechat import WeChatRPA
 
 
 class WeChatProfileOperations:
@@ -21,7 +19,7 @@ class WeChatProfileOperations:
 
     PROFILE_TITLES = ("详细资料", "基本资料", "资料", "个人信息", "添加朋友")
 
-    def __init__(self, owner: "WeChatRPA"):
+    def __init__(self, owner: Any):
         """
         初始化资料卡操作类
 
@@ -37,7 +35,12 @@ class WeChatProfileOperations:
         end_time = time.time() + timeout
         while time.time() < end_time:
             # 检查弹窗式资料卡
-            popup = self._owner._get_window(class_name="mmui::ProfileUniquePop", search_depth=3)
+            popup = typing.cast(
+                Any,
+                self._owner._get_window(
+                    class_name="mmui::ProfileUniquePop", search_depth=3
+                ),
+            )
             if popup.Exists(0.3):
                 logger.debug("检测到弹窗式资料卡")
                 try:
@@ -48,7 +51,7 @@ class WeChatProfileOperations:
 
             # 检查标题为"详细资料"等窗口
             for title in self.PROFILE_TITLES:
-                win = self._owner._get_window(title)
+                win = typing.cast(Any, self._owner._get_window(title))
                 if win.Exists(0.3):
                     logger.debug("检测到资料窗口: {}", title)
                     try:
@@ -63,7 +66,7 @@ class WeChatProfileOperations:
 
     # ====================== 头像操作 ======================
 
-    def _click_avatar_if_possible(self, profile_win: auto.WindowControl) -> None:
+    def _click_avatar_if_possible(self, profile_win: Any) -> None:
         """尝试点击资料卡中的头像"""
         try:
             avatar = profile_win.ImageControl(RegexName="avatar|头像", searchDepth=12)
@@ -78,7 +81,8 @@ class WeChatProfileOperations:
 
             candidates = []
             try:
-                for ctrl in profile_win.GetDescendants():
+                profile_win_any = typing.cast(Any, profile_win)
+                for ctrl in profile_win_any.GetDescendants():
                     try:
                         cls = str(getattr(ctrl, "ClassName", "") or "")
                         if "ContactProfileView" in cls or "profile" in cls.lower():
@@ -107,7 +111,7 @@ class WeChatProfileOperations:
         self,
         main_win: auto.WindowControl,
         item_name: Optional[str],
-    ) -> Optional[dict]:
+    ) -> Optional[dict[str, str | None]]:
         """兜底：从聊天窗口标题或列表项名称提取标识"""
         title = ""
         try:
@@ -131,7 +135,7 @@ class WeChatProfileOperations:
 
     # ====================== 信息提取 ======================
 
-    def _extract_nickname_from_profile(self, profile_win: auto.WindowControl) -> Optional[str]:
+    def _extract_nickname_from_profile(self, profile_win: Any) -> Optional[str]:
         """
         从资料卡中提取昵称（仅昵称，不包含微信号）。
 
@@ -146,7 +150,7 @@ class WeChatProfileOperations:
             # 昵称控件的 AutomationId 格式: right_v_view.nickname_button_view.display_name_text
             nickname_ctrl = profile_win.TextControl(
                 AutomationId="right_v_view.nickname_button_view.display_name_text",
-                searchDepth=20
+                searchDepth=20,
             )
             if nickname_ctrl.Exists(0):
                 nickname = (nickname_ctrl.Name or "").strip()
@@ -155,7 +159,8 @@ class WeChatProfileOperations:
                     return nickname
 
             # 方法2: 通过 ClassName 查找 mmui::XTextView
-            all_controls = list(profile_win.GetDescendants())[:100]
+            profile_win_any = typing.cast(Any, profile_win)
+            all_controls = list(profile_win_any.GetDescendants())[:100]
             for ctrl in all_controls:
                 try:
                     cls = getattr(ctrl, "ClassName", "") or ""
@@ -183,10 +188,10 @@ class WeChatProfileOperations:
                     if "微信号" in text_str or "备注" in text_str or "微信" in text_str:
                         continue
                     # 排除纯数字和纯英文
-                    if text_str.isdigit() or text_str.encode('utf-8').isalpha():
+                    if text_str.isdigit() or text_str.encode("utf-8").isalpha():
                         continue
                     # 判断是否包含中文（昵称通常是中文）
-                    if any('\u4e00' <= char <= '\u9fff' for char in text_str):
+                    if any("\u4e00" <= char <= "\u9fff" for char in text_str):
                         if len(text_str) > 1 and len(text_str) < 30:
                             logger.debug("提取到昵称: {}", text_str)
                             return text_str
@@ -199,9 +204,9 @@ class WeChatProfileOperations:
 
     def _extract_profile_info(
         self,
-        profile_win: auto.Control,
+        profile_win: Any,
         sidebar_rect: Optional[tuple[int, int, int, int]] = None,
-    ) -> Optional[dict]:
+    ) -> Optional[dict[str, str | None]]:
         """从资料卡提取微信号/昵称/备注"""
         wechat_id: Optional[str] = None
         nickname: Optional[str] = None
@@ -226,7 +231,8 @@ class WeChatProfileOperations:
                     logger.debug("提取到昵称: {}", nickname)
 
             if not nickname or len(nickname) <= 1:
-                text_controls = list(profile_win.GetDescendants())[:20]
+                profile_win_any = typing.cast(Any, profile_win)
+                text_controls = list(profile_win_any.GetDescendants())[:20]
                 for ctrl in text_controls:
                     try:
                         text = getattr(ctrl, "Name", "")
@@ -235,7 +241,10 @@ class WeChatProfileOperations:
                         text_str = str(text)
                         if "微信号" in text_str or "备注" in text_str:
                             continue
-                        if any('\u4e00' <= char <= '\u9fff' for char in text_str) and "微信" not in text_str:
+                        if (
+                            any("\u4e00" <= char <= "\u9fff" for char in text_str)
+                            and "微信" not in text_str
+                        ):
                             nickname = text_str.strip()
                             if len(nickname) > 1:
                                 logger.debug("提取到昵称: {}", nickname)
@@ -251,11 +260,12 @@ class WeChatProfileOperations:
             "WeChat": "wechat_id",
             "备注": "remark",
             "remark": "remark",
-            "昵称": "nickname"
+            "昵称": "nickname",
         }
 
         try:
-            all_text_controls = list(profile_win.GetDescendants())
+            profile_win_any = typing.cast(Any, profile_win)
+            all_text_controls = list(profile_win_any.GetDescendants())
 
             for ctrl in all_text_controls:
                 try:
@@ -267,9 +277,12 @@ class WeChatProfileOperations:
                         continue
 
                     # 直接通过 ContactProfileTextView 提取微信号
-                    if (not wechat_id and
-                        "ContactProfileTextView" in automation_id + class_name and
-                        "微信" not in text and len(text) >= 4):
+                    if (
+                        not wechat_id
+                        and "ContactProfileTextView" in automation_id + class_name
+                        and "微信" not in text
+                        and len(text) >= 4
+                    ):
                         wechat_id = text
                         logger.debug("提取微信号: {}", text)
                         continue
@@ -278,13 +291,19 @@ class WeChatProfileOperations:
                     for field_keyword, target_field in field_mappings.items():
                         if text.lower().startswith(field_keyword.lower()):
                             parts = text.split(":", 1)
-                            value = parts[1].strip() if len(parts) > 1 and parts[1].strip() else ""
+                            value = (
+                                parts[1].strip()
+                                if len(parts) > 1 and parts[1].strip()
+                                else ""
+                            )
                             if value:
                                 if target_field == "wechat_id" and not wechat_id:
                                     wechat_id = value
                                 elif target_field == "remark" and not remark:
                                     remark = value
-                                elif target_field == "nickname" and (not nickname or len(nickname) <= 1):
+                                elif target_field == "nickname" and (
+                                    not nickname or len(nickname) <= 1
+                                ):
                                     nickname = value
                             break
 
@@ -327,17 +346,28 @@ class WeChatProfileOperations:
                 for ctrl in all_controls:
                     try:
                         ctrl_type = str(getattr(ctrl, "ControlTypeName", "") or "")
-                        if ctrl_type in ("ImageControl", "ButtonControl", "PaneControl",
-                                         "CustomControl", "GroupControl"):
+                        if ctrl_type in (
+                            "ImageControl",
+                            "ButtonControl",
+                            "PaneControl",
+                            "CustomControl",
+                            "GroupControl",
+                        ):
                             continue
                         aid = str(getattr(ctrl, "AutomationId", "") or "")
                         cls = str(getattr(ctrl, "ClassName", "") or "")
                         name = str(getattr(ctrl, "Name", "") or "")
                         key = f"{aid} {cls} {name}".lower()
-                        if not any(k in key for k in ("avatar", "head", "portrait", "profile", "头像")):
+                        if not any(
+                            k in key
+                            for k in ("avatar", "head", "portrait", "profile", "头像")
+                        ):
                             continue
                         rect = ctrl.BoundingRectangle
-                        if rect.width() > list_rect.width() * 0.6 or rect.height() > list_rect.height() * 0.6:
+                        if (
+                            rect.width() > list_rect.width() * 0.6
+                            or rect.height() > list_rect.height() * 0.6
+                        ):
                             continue
                         candidates.append(ctrl)
                     except Exception:
@@ -368,7 +398,9 @@ class WeChatProfileOperations:
             def _click_control_center(ctrl: auto.Control) -> bool:
                 try:
                     rect = ctrl.BoundingRectangle
-                    auto.Click(rect.left + rect.width() // 2, rect.top + rect.height() // 2)
+                    auto.Click(
+                        rect.left + rect.width() // 2, rect.top + rect.height() // 2
+                    )
                     return True
                 except Exception:
                     return False
@@ -381,7 +413,8 @@ class WeChatProfileOperations:
                     continue
                 logger.debug("已点击消息头像控件")
                 time.sleep(0.5)
-                profile_win = self._wait_profile_window(timeout=1.6)
+                profile_timeout = max(self._owner.profile_timeout, 1.0)
+                profile_win = self._wait_profile_window(timeout=profile_timeout)
                 if profile_win:
                     return (profile_win, None)
 

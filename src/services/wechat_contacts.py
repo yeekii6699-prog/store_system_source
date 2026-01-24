@@ -7,27 +7,25 @@ from __future__ import annotations
 
 import re
 import time
-from typing import Optional, List, Any, Literal, TYPE_CHECKING, TypedDict
+from typing import Optional, List, Any, Literal, TypedDict
 
 import uiautomation as auto
 from loguru import logger
 
-if TYPE_CHECKING:
-    from .wechat import WeChatRPA
-
 
 class NewFriendItem(TypedDict):
     """新的朋友列表项数据结构"""
-    name: str           # 昵称
+
+    name: str  # 昵称
     status: Literal["已添加", "等待验证"]  # 状态（微信UI显示）
-    raw_text: str       # 原始文本
-    control: Any        # 控件对象
+    raw_text: str  # 原始文本
+    control: Any  # 控件对象
 
 
 class WeChatContactsOperations:
     """微信通讯录操作类"""
 
-    def __init__(self, owner: "WeChatRPA"):
+    def __init__(self, owner: Any):
         """
         初始化通讯录操作类
 
@@ -42,19 +40,13 @@ class WeChatContactsOperations:
     def _click_contacts_tab(self) -> bool:
         """点击侧边栏'通讯录' Tab"""
         return self._owner._click_button(
-            "通讯录",
-            timeout=2,
-            search_depth=8,
-            class_name="mmui::XTabBarItem"
+            "通讯录", timeout=2, search_depth=8, class_name="mmui::XTabBarItem"
         )
 
     def _return_to_chat_list(self) -> bool:
         """返回聊天列表界面"""
         return self._owner._click_button(
-            "微信",
-            timeout=2,
-            search_depth=8,
-            class_name="mmui::XTabBarItem"
+            "微信", timeout=2, search_depth=8, class_name="mmui::XTabBarItem"
         )
 
     # ====================== 新的朋友入口 ======================
@@ -76,7 +68,9 @@ class WeChatContactsOperations:
             return True
 
         # 尝试点击展开
-        new_friends = self._owner._find_and_click_list_item("新的朋友", timeout=1, search_depth=15)
+        new_friends = self._owner._find_and_click_list_item(
+            "新的朋友", timeout=1, search_depth=15
+        )
         if new_friends:
             self._owner._random_delay(0.5, 1.0)
             return True
@@ -95,7 +89,10 @@ class WeChatContactsOperations:
                                     try:
                                         name = getattr(child, "Name", "") or ""
                                         cls = getattr(child, "ClassName", "") or ""
-                                        if name == "新的朋友" and cls == "mmui::ContactsCellGroupView":
+                                        if (
+                                            name == "新的朋友"
+                                            and cls == "mmui::ContactsCellGroupView"
+                                        ):
                                             child.Click()
                                             self._owner._random_delay(0.5, 1.0)
                                             return True
@@ -124,15 +121,13 @@ class WeChatContactsOperations:
 
         # 查找通讯录列表容器
         list_container = self._owner._find_control(
-            auto.ListControl,
-            AutomationId="primary_table_.contact_list",
-            searchDepth=12
+            auto.ListControl, AutomationId="primary_table_.contact_list", searchDepth=12
         )
         if not list_container or not list_container.Exists(1):
             list_container = self._owner._find_control(
                 auto.ListControl,
                 ClassName="mmui::StickyHeaderRecyclerListView",
-                searchDepth=12
+                searchDepth=12,
             )
 
         if not list_container or not list_container.Exists(1):
@@ -147,21 +142,25 @@ class WeChatContactsOperations:
                     if "等待验证" in item_name:
                         nickname = item_name.replace("等待验证", "").strip()
                         status: Literal["已添加", "等待验证"] = "等待验证"
-                        items.append(NewFriendItem(
-                            name=nickname,
-                            status=status,
-                            raw_text=item_name,
-                            control=child
-                        ))
+                        items.append(
+                            NewFriendItem(
+                                name=nickname,
+                                status=status,
+                                raw_text=item_name,
+                                control=child,
+                            )
+                        )
                     elif "已添加" in item_name:
                         nickname = item_name.replace("已添加", "").strip()
                         status: Literal["已添加", "等待验证"] = "已添加"
-                        items.append(NewFriendItem(
-                            name=nickname,
-                            status=status,
-                            raw_text=item_name,
-                            control=child
-                        ))
+                        items.append(
+                            NewFriendItem(
+                                name=nickname,
+                                status=status,
+                                raw_text=item_name,
+                                control=child,
+                            )
+                        )
                 except Exception:
                     continue
 
@@ -169,7 +168,11 @@ class WeChatContactsOperations:
                 if items:
                     verified_count = sum(1 for i in items if i["status"] == "已添加")
                     pending_count = sum(1 for i in items if i["status"] == "等待验证")
-                    logger.info("新的朋友列表: 已添加={}, 等待验证={}", verified_count, pending_count)
+                    logger.info(
+                        "新的朋友列表: 已添加={}, 等待验证={}",
+                        verified_count,
+                        pending_count,
+                    )
                 else:
                     logger.debug("新的朋友列表为空")
         except Exception as e:
@@ -238,13 +241,17 @@ class WeChatContactsOperations:
         对方加我时，需要点击"前往验证"按钮确认。
         """
         # 先尝试点击"前往验证"
-        if self._owner._click_button("前往验证", timeout=3, search_depth=15, class_name="mmui::XOutlineButton"):
+        if self._owner._click_button(
+            "前往验证", timeout=3, search_depth=15, class_name="mmui::XOutlineButton"
+        ):
             self._owner._random_delay(0.5, 1.0)
             time.sleep(0.8)
             return True
 
         # 尝试点击"确定"
-        if self._owner._click_button("确定", timeout=3, search_depth=15, class_name="mmui::XOutlineButton"):
+        if self._owner._click_button(
+            "确定", timeout=3, search_depth=15, class_name="mmui::XOutlineButton"
+        ):
             self._owner._random_delay(0.5, 1.0)
             time.sleep(0.8)
             return True
@@ -252,7 +259,9 @@ class WeChatContactsOperations:
         # 备用：模糊匹配
         confirm_patterns = ["前往验证", "确定", "同意"]
         for pattern in confirm_patterns:
-            if self._owner._click_button_by_name_contains(pattern, timeout=2, search_depth=15):
+            if self._owner._click_button_by_name_contains(
+                pattern, timeout=2, search_depth=15
+            ):
                 self._owner._random_delay(0.5, 1.0)
                 time.sleep(0.8)
                 return True
@@ -267,13 +276,17 @@ class WeChatContactsOperations:
         Returns:
             是否成功点击
         """
-        if self._owner._click_button("前往验证", timeout=3, search_depth=15, class_name="mmui::XOutlineButton"):
+        if self._owner._click_button(
+            "前往验证", timeout=3, search_depth=15, class_name="mmui::XOutlineButton"
+        ):
             self._owner._random_delay(0.5, 1.0)
             time.sleep(0.8)
             return True
 
         # 备用：模糊匹配
-        if self._owner._click_button_by_name_contains("前往验证", timeout=2, search_depth=15):
+        if self._owner._click_button_by_name_contains(
+            "前往验证", timeout=2, search_depth=15
+        ):
             self._owner._random_delay(0.5, 1.0)
             time.sleep(0.8)
             return True
@@ -300,12 +313,14 @@ class WeChatContactsOperations:
             auto.ButtonControl,
             Name="确定",
             ClassName="mmui::XOutlineButton",
-            searchDepth=15
+            searchDepth=15,
         )
 
         # 方式2: 查找任何包含"确定"的按钮
         if not confirm_btn or not confirm_btn.Exists(1):
-            confirm_btn = self._owner._click_button("确定", timeout=2, search_depth=15, class_name="mmui::XOutlineButton")
+            confirm_btn = self._owner._click_button(
+                "确定", timeout=2, search_depth=15, class_name="mmui::XOutlineButton"
+            )
             if confirm_btn:
                 logger.debug("点击'确定'按钮成功")
                 self._owner._random_delay(0.5, 1.0)
@@ -314,9 +329,7 @@ class WeChatContactsOperations:
 
         # 方式3: 查找弹窗 WindowControl
         popup_win = self._owner._find_control(
-            auto.WindowControl,
-            ClassName="mmui::Popup",
-            searchDepth=10
+            auto.WindowControl, ClassName="mmui::Popup", searchDepth=10
         )
         if popup_win and popup_win.Exists(1):
             confirm_btn = popup_win.ButtonControl(Name="确定", searchDepth=10)
@@ -329,9 +342,7 @@ class WeChatContactsOperations:
 
         # 方式4: 查找 MessageBox 风格的窗口
         msgbox_win = self._owner._find_control(
-            auto.WindowControl,
-            RegexName=".*确认.*|.*验证.*",
-            searchDepth=10
+            auto.WindowControl, RegexName=".*确认.*|.*验证.*", searchDepth=10
         )
         if msgbox_win and msgbox_win.Exists(0.5):
             confirm_btn = msgbox_win.ButtonControl(Name="确定", searchDepth=5)
@@ -376,7 +387,9 @@ class WeChatContactsOperations:
             logger.debug("未找到微信主窗口")
             return None
 
-        def collect_controls(control: Any, depth: int = 0, max_depth: int = 50) -> List[Any]:
+        def collect_controls(
+            control: Any, depth: int = 0, max_depth: int = 50
+        ) -> List[Any]:
             if depth > max_depth:
                 return []
             result = [control]
@@ -397,10 +410,12 @@ class WeChatContactsOperations:
                 if "ContactProfileTextView" in ctrl_class:
                     ctrl_automation_id = getattr(ctrl, "AutomationId", "") or ""
                     ctrl_name = getattr(ctrl, "Name", "") or ""
-                    profile_text_views.append({
-                        "name": ctrl_name,
-                        "automation_id": ctrl_automation_id,
-                    })
+                    profile_text_views.append(
+                        {
+                            "name": ctrl_name,
+                            "automation_id": ctrl_automation_id,
+                        }
+                    )
             except Exception:
                 continue
 
@@ -409,9 +424,15 @@ class WeChatContactsOperations:
             ctrl_name = item["name"]
             ctrl_automation_id = item["automation_id"]
 
-            if "basic_line_view" in ctrl_automation_id and ctrl_automation_id.endswith("ContactProfileTextView"):
+            if "basic_line_view" in ctrl_automation_id and ctrl_automation_id.endswith(
+                "ContactProfileTextView"
+            ):
                 if re.match(r"^[A-Za-z0-9_.-]{4,20}$", ctrl_name):
-                    logger.debug("提取到微信号: {} (AutomationId={})", ctrl_name, ctrl_automation_id)
+                    logger.debug(
+                        "提取到微信号: {} (AutomationId={})",
+                        ctrl_name,
+                        ctrl_automation_id,
+                    )
                     return ctrl_name
 
         logger.debug("未找到有效的微信号")
@@ -453,7 +474,7 @@ class WeChatContactsOperations:
         send_btn = self._owner._find_control(
             auto.ButtonControl,
             AutomationId="fixed_height_v_view.content_v_view.ContactProfileBottomUi.foot_button_view.chat_img_button",
-            searchDepth=20
+            searchDepth=20,
         )
         if send_btn and send_btn.Exists(1):
             send_btn.Click()
@@ -466,7 +487,7 @@ class WeChatContactsOperations:
             auto.ButtonControl,
             Name="发消息",
             ClassName="mmui::ContactProfileBottomButton",
-            searchDepth=20
+            searchDepth=20,
         )
         if send_btn and send_btn.Exists(1):
             send_btn.Click()
@@ -475,7 +496,12 @@ class WeChatContactsOperations:
             return True
 
         # 方法3: 备用 - 通过按钮名称模糊查找
-        if self._owner._click_button("发消息", timeout=3, search_depth=15, class_name="mmui::ContactProfileBottomButton"):
+        if self._owner._click_button(
+            "发消息",
+            timeout=3,
+            search_depth=15,
+            class_name="mmui::ContactProfileBottomButton",
+        ):
             return True
 
         logger.warning("未找到'发消息'按钮")
@@ -515,7 +541,7 @@ class WeChatContactsOperations:
             auto.MenuItemControl,
             Name="删除",
             ClassName="mmui::XMenuView",
-            searchDepth=10
+            searchDepth=10,
         )
 
         # 如果找不到，尝试通过 WindowControl 查找
@@ -524,13 +550,10 @@ class WeChatContactsOperations:
                 auto.WindowControl,
                 Name="Weixin",
                 ClassName="mmui::XMenu",
-                searchDepth=5
+                searchDepth=5,
             )
             if menu_win and menu_win.Exists(0.5):
-                delete_menu = menu_win.MenuItemControl(
-                    Name="删除",
-                    searchDepth=10
-                )
+                delete_menu = menu_win.MenuItemControl(Name="删除", searchDepth=10)
 
         if delete_menu and delete_menu.Exists(0.5):
             try:
@@ -596,7 +619,11 @@ class WeChatContactsOperations:
                 if matched_item:
                     record_id, _ = matched_item
                     feishu.update_status(record_id, "已绑定")
-                    logger.info("飞书状态已更新为'已绑定': {} (record_id={})", nickname, record_id)
+                    logger.info(
+                        "飞书状态已更新为'已绑定': {} (record_id={})",
+                        nickname,
+                        record_id,
+                    )
             else:
                 logger.warning("未在飞书中找到昵称对应的记录: {}", nickname)
         except Exception as e:
@@ -604,6 +631,7 @@ class WeChatContactsOperations:
         # ===========================================
 
         # 返回"新的朋友"列表
+        self._owner._activate_window()
         self._click_contacts_tab()
         self._click_new_friends_entry()
         self._owner._random_delay(0.5, 1.0)
@@ -620,7 +648,13 @@ class WeChatContactsOperations:
         self._processed_nickname = None
         return success
 
-    def _process_verified_friend(self, item: NewFriendItem, feishu, welcome_enabled: bool, welcome_steps: List[dict]) -> bool:
+    def _process_verified_friend(
+        self,
+        item: NewFriendItem,
+        feishu,
+        welcome_enabled: bool,
+        welcome_steps: List[dict[str, str | None]],
+    ) -> bool:
         """
         处理'已添加'的好友（我主动添加后对方通过）。
 
@@ -663,11 +697,13 @@ class WeChatContactsOperations:
             try:
                 # 写入飞书：微信号字段=微信号，状态=已绑定
                 feishu.upsert_contact_profile(
-                    wechat_id=wechat_id,
-                    nickname=nickname,
-                    status="已绑定"
+                    wechat_id=wechat_id, nickname=nickname, status="已绑定"
                 )
-                logger.info("[已添加] 飞书写入成功: 微信号={}, 昵称={}, 状态=已绑定", wechat_id, nickname)
+                logger.info(
+                    "[已添加] 飞书写入成功: 微信号={}, 昵称={}, 状态=已绑定",
+                    wechat_id,
+                    nickname,
+                )
             except Exception as e:
                 logger.warning("[已添加] 飞书写入失败: {} - {}", nickname, e)
         else:
@@ -681,7 +717,9 @@ class WeChatContactsOperations:
 
         # 5. 发送welcome（已在聊天窗口中，already_in_chat=True）
         if welcome_enabled and welcome_steps:
-            self._owner.send_welcome_package([nickname], welcome_steps, already_in_chat=True)
+            self._owner.send_welcome_package(
+                [nickname], welcome_steps, already_in_chat=True
+            )
             self._processed_nickname = nickname  # 暂存昵称用于删除
 
         # 6. 通过昵称删除（会返回"新的朋友"列表再删除）
@@ -692,7 +730,13 @@ class WeChatContactsOperations:
 
         return True
 
-    def _process_pending_verification(self, item: NewFriendItem, feishu, welcome_enabled: bool, welcome_steps: List[dict]) -> bool:
+    def _process_pending_verification(
+        self,
+        item: NewFriendItem,
+        feishu,
+        welcome_enabled: bool,
+        welcome_steps: List[dict[str, str | None]],
+    ) -> bool:
         """
         处理'等待验证'的项（对方加我，需要我前往验证）。
 
@@ -747,11 +791,13 @@ class WeChatContactsOperations:
             try:
                 # 写入飞书：微信号字段=微信号，状态=已绑定
                 feishu.upsert_contact_profile(
-                    wechat_id=wechat_id,
-                    nickname=nickname,
-                    status="已绑定"
+                    wechat_id=wechat_id, nickname=nickname, status="已绑定"
                 )
-                logger.info("[待验证] 飞书写入成功: 微信号={}, 昵称={}, 状态=已绑定", wechat_id, nickname)
+                logger.info(
+                    "[待验证] 飞书写入成功: 微信号={}, 昵称={}, 状态=已绑定",
+                    wechat_id,
+                    nickname,
+                )
             except Exception as e:
                 logger.warning("[待验证] 飞书写入失败: {} - {}", nickname, e)
         else:
@@ -765,7 +811,9 @@ class WeChatContactsOperations:
 
         # 7. 发送welcome（已在聊天窗口中，already_in_chat=True）
         if welcome_enabled and welcome_steps:
-            self._owner.send_welcome_package([nickname], welcome_steps, already_in_chat=True)
+            self._owner.send_welcome_package(
+                [nickname], welcome_steps, already_in_chat=True
+            )
             self._processed_nickname = nickname  # 暂存昵称用于删除
 
         # 8. 通过昵称删除（会返回"新的朋友"列表再删除）
@@ -778,7 +826,12 @@ class WeChatContactsOperations:
 
     # ====================== 扫描入口 ======================
 
-    def scan_new_friends_via_contacts(self, feishu, welcome_enabled: bool, welcome_steps: List[dict]) -> int:
+    def scan_new_friends_via_contacts(
+        self,
+        feishu,
+        welcome_enabled: bool,
+        welcome_steps: List[Any],
+    ) -> int:
         """
         通过通讯录-新的朋友扫描并处理新好友。
 
@@ -821,15 +874,23 @@ class WeChatContactsOperations:
         verified_friends = self._get_verified_friends()
         pending_items = self._get_pending_verification()
 
-        logger.info("开始处理新好友: 已添加={}, 待验证={}", len(verified_friends), len(pending_items))
+        logger.info(
+            "开始处理新好友: 已添加={}, 待验证={}",
+            len(verified_friends),
+            len(pending_items),
+        )
 
         processed_count = 0
 
         # ====================== 第一阶段：处理'已添加'的好友 ======================
         for idx, item in enumerate(verified_friends, 1):
             try:
-                logger.info("[阶段1/2] [{}/{}] 处理已添加好友", idx, len(verified_friends))
-                if self._process_verified_friend(item, feishu, welcome_enabled, welcome_steps):
+                logger.info(
+                    "[阶段1/2] [{}/{}] 处理已添加好友", idx, len(verified_friends)
+                )
+                if self._process_verified_friend(
+                    item, feishu, welcome_enabled, welcome_steps
+                ):
                     processed_count += 1
             except Exception as e:
                 logger.error("[已添加] 处理异常: {} - {}", item["name"], e)
@@ -840,6 +901,7 @@ class WeChatContactsOperations:
                 except Exception:
                     pass
                 if idx < len(verified_friends):
+                    self._owner._activate_window()
                     self._click_contacts_tab()
                     self._click_new_friends_entry()
 
@@ -847,7 +909,9 @@ class WeChatContactsOperations:
         for idx, item in enumerate(pending_items, 1):
             try:
                 logger.info("[阶段2/2] [{}/{}] 处理待验证好友", idx, len(pending_items))
-                if self._process_pending_verification(item, feishu, welcome_enabled, welcome_steps):
+                if self._process_pending_verification(
+                    item, feishu, welcome_enabled, welcome_steps
+                ):
                     processed_count += 1
             except Exception as e:
                 logger.error("[待验证] 处理异常: {} - {}", item["name"], e)
@@ -858,6 +922,7 @@ class WeChatContactsOperations:
                 except Exception:
                     pass
                 if idx < len(pending_items):
+                    self._owner._activate_window()
                     self._click_contacts_tab()
                     self._click_new_friends_entry()
 

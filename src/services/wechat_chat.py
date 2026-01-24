@@ -6,19 +6,16 @@
 from __future__ import annotations
 
 import time
-from typing import Optional, Sequence, List, Any, TYPE_CHECKING
+from typing import Optional, Sequence, List, Any
 
 import uiautomation as auto
 from loguru import logger
-
-if TYPE_CHECKING:
-    from .wechat import WeChatRPA
 
 
 class WeChatChatOperations:
     """微信聊天消息操作类"""
 
-    def __init__(self, owner: "WeChatRPA"):
+    def __init__(self, owner: Any):
         """
         初始化聊天操作类
 
@@ -49,7 +46,9 @@ class WeChatChatOperations:
             logger.debug("获取聊天消息失败: {}", e)
             return messages
 
-    def _find_chat_message_list(self, main_win: auto.WindowControl) -> Optional[auto.Control]:
+    def _find_chat_message_list(
+        self, main_win: auto.WindowControl
+    ) -> Optional[auto.Control]:
         """查找聊天消息列表控件"""
         # 方法1: 直接通过AutomationId查找
         direct = main_win.ListControl(AutomationId="chat_message_list", searchDepth=15)
@@ -75,7 +74,11 @@ class WeChatChatOperations:
                 cls = str(getattr(ctrl, "ClassName", "") or "")
                 if aid == "session_list" or name == "会话":
                     continue
-                if aid == "chat_message_list" or "RecyclerListView" in cls or name == "消息":
+                if (
+                    aid == "chat_message_list"
+                    or "RecyclerListView" in cls
+                    or name == "消息"
+                ):
                     candidates.append(ctrl)
             except Exception:
                 continue
@@ -90,7 +93,15 @@ class WeChatChatOperations:
                 if not parent:
                     return False
                 cls = str(getattr(parent, "ClassName", "") or "")
-                if any(x in cls for x in ("ChatDetailView", "ChatMessagePage", "MessageView", "ChatMasterView")):
+                if any(
+                    x in cls
+                    for x in (
+                        "ChatDetailView",
+                        "ChatMessagePage",
+                        "MessageView",
+                        "ChatMasterView",
+                    )
+                ):
                     return True
             return False
 
@@ -100,7 +111,9 @@ class WeChatChatOperations:
 
         return candidates[0] if candidates else None
 
-    def _find_chat_content_area(self, main_win: auto.WindowControl) -> Optional[auto.Control]:
+    def _find_chat_content_area(
+        self, main_win: auto.WindowControl
+    ) -> Optional[auto.Control]:
         """查找聊天内容区域（通常在右侧）"""
         try:
             # 方法1: 查找输入框上方区域
@@ -112,11 +125,24 @@ class WeChatChatOperations:
                 for control in main_win.GetChildren():
                     try:
                         rect = control.BoundingRectangle
-                        if (rect.bottom < edit_rect.top and
-                            rect.width() > 200 and rect.height() > 100):
-                            if control.ControlTypeName in ["Document", "Pane", "GroupControl"]:
-                                logger.debug("找到聊天内容区域: {} 位置({},{}) 大小{}x{}",
-                                           control.ControlTypeName, rect.left, rect.top, rect.width(), rect.height())
+                        if (
+                            rect.bottom < edit_rect.top
+                            and rect.width() > 200
+                            and rect.height() > 100
+                        ):
+                            if control.ControlTypeName in [
+                                "Document",
+                                "Pane",
+                                "GroupControl",
+                            ]:
+                                logger.debug(
+                                    "找到聊天内容区域: {} 位置({},{}) 大小{}x{}",
+                                    control.ControlTypeName,
+                                    rect.left,
+                                    rect.top,
+                                    rect.width(),
+                                    rect.height(),
+                                )
                                 return control
                     except Exception:
                         continue
@@ -131,7 +157,11 @@ class WeChatChatOperations:
                 try:
                     if control.ControlTypeName in ["Document", "Pane", "GroupControl"]:
                         rect = control.BoundingRectangle
-                        if rect.left > right_x and rect.width() > 200 and rect.height() > 200:
+                        if (
+                            rect.left > right_x
+                            and rect.width() > 200
+                            and rect.height() > 200
+                        ):
                             return control
                 except Exception:
                     continue
@@ -141,10 +171,7 @@ class WeChatChatOperations:
         return None
 
     def _collect_all_text_from_control(
-        self,
-        control: auto.Control,
-        max_depth: int = 20,
-        current_depth: int = 0
+        self, control: auto.Control, max_depth: int = 20, current_depth: int = 0
     ) -> List[str]:
         """递归收集控件中的所有文本内容"""
         texts: List[str] = []
@@ -157,16 +184,20 @@ class WeChatChatOperations:
             if name and isinstance(name, str) and name.strip():
                 texts.append(name.strip())
 
-            if hasattr(control, 'GetChildren'):
+            if hasattr(control, "GetChildren"):
                 for child in control.GetChildren():
-                    child_texts = self._collect_all_text_from_control(child, max_depth, current_depth + 1)
+                    child_texts = self._collect_all_text_from_control(
+                        child, max_depth, current_depth + 1
+                    )
                     texts.extend(child_texts)
         except Exception:
             pass
 
         return texts
 
-    def _chat_has_keywords(self, main_win: auto.WindowControl, keywords: Sequence[str]) -> bool:
+    def _chat_has_keywords(
+        self, main_win: auto.WindowControl, keywords: Sequence[str]
+    ) -> bool:
         """检测当前会话的聊天内容是否包含特定关键词"""
         logger.debug("检查聊天页面内容，关键词: {}", keywords)
 
@@ -187,9 +218,14 @@ class WeChatChatOperations:
 
         # 模糊匹配系统消息
         system_patterns = [
-            "已添加你为朋友", "你已添加了", "你现在可以给 ta 发送消息",
-            "你们现在是好友了", "刚刚把你添加到通讯录", "现在可以开始聊天了",
-            "以上是打招呼的消息", "以上是打招呼的内容",
+            "已添加你为朋友",
+            "你已添加了",
+            "你现在可以给 ta 发送消息",
+            "你们现在是好友了",
+            "刚刚把你添加到通讯录",
+            "现在可以开始聊天了",
+            "以上是打招呼的消息",
+            "以上是打招呼的内容",
         ]
         for pattern in system_patterns:
             if pattern in combined_text:
@@ -200,11 +236,15 @@ class WeChatChatOperations:
 
     # ====================== 会话列表查找 ======================
 
-    def _find_chat_list(self, main_window: auto.WindowControl) -> Optional[auto.Control]:
+    def _find_chat_list(
+        self, main_window: auto.WindowControl
+    ) -> Optional[auto.Control]:
         """查找会话列表控件"""
         search_paths = [
             lambda: main_window.ListControl(Name="会话", searchDepth=12),
-            lambda: self._owner._find_control_by_name(main_window, "会话", "ListControl"),
+            lambda: self._owner._find_control_by_name(
+                main_window, "会话", "ListControl"
+            ),
             lambda: main_window.GroupControl().ListControl(),
             lambda: main_window.ListControl(searchDepth=6),
             lambda: main_window.ListControl(searchDepth=8),
@@ -245,8 +285,12 @@ class WeChatChatOperations:
                 is_left_side = rect.left < window_left_40pct
 
                 if is_session_like or is_left_side or control_name == "会话":
-                    logger.info("路径{}命中会话列表: {} ({}个子项)",
-                               i, control.ControlTypeName, len(children))
+                    logger.info(
+                        "路径{}命中会话列表: {} ({}个子项)",
+                        i,
+                        control.ControlTypeName,
+                        len(children),
+                    )
                     return control
 
                 if fallback_control is None:
@@ -260,7 +304,11 @@ class WeChatChatOperations:
         # 最终兜底：扫描所有ListControl
         all_controls: List[auto.Control] = []
         self._owner._collect_all_controls(main_window, all_controls, max_depth=20)
-        list_controls = [c for c in all_controls if getattr(c, "ControlTypeName", "") == "ListControl"]
+        list_controls = [
+            c
+            for c in all_controls
+            if getattr(c, "ControlTypeName", "") == "ListControl"
+        ]
 
         for ctrl in list_controls:
             try:

@@ -13,7 +13,16 @@
 from __future__ import annotations
 
 import time
-from typing import Optional, Sequence, Literal, List, TypedDict, Any, TYPE_CHECKING
+from typing import (
+    Optional,
+    Sequence,
+    Literal,
+    List,
+    TypedDict,
+    Any,
+    TYPE_CHECKING,
+    cast,
+)
 
 import uiautomation as auto
 from loguru import logger
@@ -65,8 +74,21 @@ class WeChatRPA:
         # 加载配置
         config = get_config()
         self.scan_interval = int(config.get("NEW_FRIEND_SCAN_INTERVAL", "30"))
-        self.monitor_keywords = config.get("MONITOR_KEYWORDS", "").split(",") if config.get("MONITOR_KEYWORDS") else []
+        self.monitor_keywords = (
+            config.get("MONITOR_KEYWORDS", "").split(",")
+            if config.get("MONITOR_KEYWORDS")
+            else []
+        )
         self.max_chats = int(config.get("MAX_CHATS", "6"))
+        self.rpa_delay_min = float(config.get("RPA_DELAY_MIN") or 0.5)
+        self.rpa_delay_max = float(config.get("RPA_DELAY_MAX") or 1.5)
+        self.relationship_timeout = float(
+            config.get("RELATIONSHIP_DETECT_TIMEOUT") or 6.0
+        )
+        self.profile_timeout = float(config.get("PROFILE_WAIT_TIMEOUT") or 4.0)
+        self.button_timeout = float(config.get("BUTTON_FIND_TIMEOUT") or 3.0)
+        self.welcome_step_delay = float(config.get("WELCOME_STEP_DELAY") or 1.0)
+        self.welcome_retry_count = int(config.get("WELCOME_RETRY_COUNT") or 0)
 
         # 初始化UI操作基类（提供通用UI方法）
         self._ui = WeChatUIOperations(self)
@@ -77,42 +99,88 @@ class WeChatRPA:
         self._contacts = WeChatContactsOperations(self)
 
         # 用于被动扫描的去重
-        self._processed_messages: set = set()
+        self._processed_messages: set[str] = set()
 
     # ====================== 委托UI操作方法 ======================
 
-    def _get_window(self, name: str = "", class_name: str = "", search_depth: int = 1) -> Optional[Any]:
+    def _get_window(
+        self, name: str = "", class_name: str = "", search_depth: int = 1
+    ) -> auto.WindowControl:
         return self._ui._get_window(name, class_name, search_depth)
 
     def _activate_window(self) -> bool:
         return self._ui._activate_window()
 
-    def _wait_for_window(self, name: str = "", class_name: str = "", timeout: float = 5.0, search_depth: int = 3) -> Optional[Any]:
+    def _wait_for_window(
+        self,
+        name: str = "",
+        class_name: str = "",
+        timeout: float = 5.0,
+        search_depth: int = 3,
+    ) -> Optional[Any]:
         return self._ui._wait_for_window(name, class_name, timeout, search_depth)
 
-    def _click_button(self, name: str, timeout: float = 3.0, search_depth: int = 15, class_name: str = "") -> bool:
-        return self._ui._click_button(name, timeout, search_depth, class_name)
+    def _click_button(
+        self,
+        name: str,
+        timeout: float | None = None,
+        search_depth: int = 15,
+        class_name: str = "",
+    ) -> bool:
+        resolved_timeout = self.button_timeout if timeout is None else timeout
+        return self._ui._click_button(name, resolved_timeout, search_depth, class_name)
 
-    def _click_button_by_name_contains(self, name_contains: str, timeout: float = 3.0, search_depth: int = 15) -> bool:
-        return self._ui._click_button_by_name_contains(name_contains, timeout, search_depth)
+    def _click_button_by_name_contains(
+        self,
+        name_contains: str,
+        timeout: float | None = None,
+        search_depth: int = 15,
+    ) -> bool:
+        resolved_timeout = self.button_timeout if timeout is None else timeout
+        return self._ui._click_button_by_name_contains(
+            name_contains, resolved_timeout, search_depth
+        )
 
-    def _find_and_click_list_item(self, name: str, timeout: float = 2.0, search_depth: int = 15) -> bool:
-        return self._ui._find_and_click_list_item(name, timeout, search_depth)
+    def _find_and_click_list_item(
+        self,
+        name: str,
+        timeout: float | None = None,
+        search_depth: int = 15,
+    ) -> bool:
+        resolved_timeout = self.button_timeout if timeout is None else timeout
+        return self._ui._find_and_click_list_item(name, resolved_timeout, search_depth)
 
-    def _handle_dialog(self, button_names: List[str], timeout: float = 5.0) -> bool:
+    def _handle_dialog(self, button_names: Sequence[str], timeout: float = 5.0) -> bool:
         return self._ui._handle_dialog(button_names, timeout)
 
-    def _handle_confirm_dialog(self, window_names: List[str], button_names: List[str], timeout: float = 8.0) -> bool:
+    def _handle_confirm_dialog(
+        self,
+        window_names: Sequence[str],
+        button_names: Sequence[str],
+        timeout: float = 8.0,
+    ) -> bool:
         return self._ui._handle_confirm_dialog(window_names, button_names, timeout)
 
-    def _find_control(self, control_type: type, name: str = "", **kwargs) -> Optional[Any]:
+    def _find_control(
+        self, control_type: type, name: str = "", **kwargs
+    ) -> Optional[Any]:
         return self._ui._find_control(control_type, name, **kwargs)
 
-    def _find_control_by_name(self, parent: Any, name: str, control_type: str) -> Optional[Any]:
+    def _find_control_by_name(
+        self, parent: Any, name: str, control_type: str
+    ) -> Optional[Any]:
         return self._ui._find_control_by_name(parent, name, control_type)
 
-    def _collect_all_controls(self, parent: Any, controls_list: list, max_depth: int = 10, current_depth: int = 0) -> None:
-        return self._ui._collect_all_controls(parent, controls_list, max_depth, current_depth)
+    def _collect_all_controls(
+        self,
+        parent: Any,
+        controls_list: list[Any],
+        max_depth: int = 10,
+        current_depth: int = 0,
+    ) -> None:
+        return self._ui._collect_all_controls(
+            parent, controls_list, max_depth, current_depth
+        )
 
     def _copy_image_to_clipboard(self, image_path: str) -> bool:
         return self._ui._copy_image_to_clipboard(image_path)
@@ -129,10 +197,14 @@ class WeChatRPA:
     def _clean_keyword(self, keyword: Any) -> str:
         return self._ui._clean_keyword(keyword)
 
-    def _random_delay(self, min_sec: float = 0.5, max_sec: float = 1.5) -> None:
+    def _random_delay(
+        self, min_sec: float | None = None, max_sec: float | None = None
+    ) -> None:
         return self._ui._random_delay(min_sec, max_sec)
 
-    def _extract_nickname_from_profile(self, profile_win: auto.WindowControl) -> Optional[str]:
+    def _extract_nickname_from_profile(
+        self, profile_win: auto.WindowControl
+    ) -> Optional[str]:
         """从资料卡中提取昵称"""
         return self._profile._extract_nickname_from_profile(profile_win)
 
@@ -163,18 +235,42 @@ class WeChatRPA:
         for ctrl in containers:
             if ctrl is None or not ctrl.Exists(0):
                 continue
-            if any(ctrl.ButtonControl(Name=name, searchDepth=15).Exists(0) for name in friend_labels):
+            if any(
+                ctrl.ButtonControl(Name=name, searchDepth=15).Exists(0)
+                for name in friend_labels
+            ):
                 has_friend = True
-            if any(ctrl.ButtonControl(Name=name, searchDepth=15).Exists(0) for name in add_labels):
+            if any(
+                ctrl.ButtonControl(Name=name, searchDepth=15).Exists(0)
+                for name in add_labels
+            ):
                 has_add = True
 
         if not has_friend and not has_add:
             return "not_found"
         return "unknown"
 
+    def _has_add_friend_not_found_popup(self) -> bool:
+        """检测添加朋友弹窗是否提示无法找到用户。"""
+        add_win = self._get_window(
+            "添加朋友",
+            class_name="mmui::AddFriendWindow",
+            search_depth=8,
+        )
+        if not add_win.Exists(0.2):
+            return False
+
+        hints = ("无法找到该用户", "请检查你填写的账号是否正确")
+        for hint in hints:
+            if add_win.TextControl(SubName=hint, searchDepth=10).Exists(0):
+                return True
+        return False
+
     # ====================== 公开API ======================
 
-    def check_relationship(self, keyword: Any) -> Literal["friend", "stranger", "unknown", "not_found"]:
+    def check_relationship(
+        self, keyword: Any
+    ) -> Literal["friend", "stranger", "unknown", "not_found"]:
         """检查关系状态"""
         keyword = self._clean_keyword(keyword)
         profile_win = self._search_and_open_profile(keyword)
@@ -185,7 +281,9 @@ class WeChatRPA:
         try:
             main_win = self._get_window(self.WINDOW_NAME)
             containers = [profile_win, main_win]
-            result = self._detect_relationship_state(containers, timeout=6.0)
+            result = self._detect_relationship_state(
+                containers, timeout=self.relationship_timeout
+            )
             if result != "unknown":
                 logger.info("[关系检测] {} -> {}", keyword, result)
         finally:
@@ -202,13 +300,27 @@ class WeChatRPA:
 
         success = False
         try:
-            if self._click_button("添加到通讯录", timeout=2, search_depth=10, class_name="mmui::XOutlineButton"):
+            if self._click_button(
+                "添加到通讯录",
+                timeout=self.button_timeout,
+                search_depth=10,
+                class_name="mmui::XOutlineButton",
+            ):
                 time.sleep(1)
-                confirm_windows = ("申请添加朋友", "发送好友申请", "好友验证", "通过朋友验证")
-                confirm_buttons = ("确定", "发送", "Send", "确定(&O)", "确定(&S)")
-                success = self._handle_confirm_dialog(confirm_windows, confirm_buttons, timeout=8.0)
+                confirm_windows = [
+                    "申请添加朋友",
+                    "发送好友申请",
+                    "好友验证",
+                    "通过朋友验证",
+                ]
+                confirm_buttons = ["确定", "发送", "Send", "确定(&O)", "确定(&S)"]
+                success = self._handle_confirm_dialog(
+                    confirm_windows, confirm_buttons, timeout=8.0
+                )
                 if not success:
-                    add_btn = profile_win.ButtonControl(Name="添加到通讯录", searchDepth=10)
+                    add_btn = profile_win.ButtonControl(
+                        Name="添加到通讯录", searchDepth=10
+                    )
                     if not add_btn.Exists(0):
                         success = True
         finally:
@@ -216,7 +328,12 @@ class WeChatRPA:
                 profile_win.SendKeys("{Esc}")
         return success
 
-    def send_welcome_package(self, keyword: Any, steps: Sequence[dict], already_in_chat: bool = False) -> bool:
+    def send_welcome_package(
+        self,
+        keyword: Any,
+        steps: Sequence[Any],
+        already_in_chat: bool = False,
+    ) -> bool:
         """
         发送欢迎包
 
@@ -236,7 +353,9 @@ class WeChatRPA:
                 return False
 
             try:
-                if not self._click_button("发消息", timeout=2, search_depth=10):
+                if not self._click_button(
+                    "发消息", timeout=self.button_timeout, search_depth=10
+                ):
                     logger.debug("未找到'发消息'按钮")
                     return False
                 time.sleep(0.8)
@@ -244,39 +363,59 @@ class WeChatRPA:
                 if profile_win.Exists(0):
                     profile_win.SendKeys("{Esc}")
 
-        self._activate_window()
+        if not self._activate_window():
+            logger.error("激活微信窗口失败，无法发送欢迎包")
+            return False
 
         logger.info("开始向 [{}] 发送欢迎包...", keyword)
-        for i, step in enumerate(steps):
-            try:
-                msg_type = step.get("type")
-                content = step.get("content") or step.get("path") or step.get("url")
-                if not content:
-                    continue
-                content = str(content)
 
-                if msg_type == "text":
-                    self._send_text(content)
-                elif msg_type == "link":
-                    title = step.get("title", "")
-                    text = f"{title}\n{content}" if title else content
-                    self._send_text(text)
-                elif msg_type == "image":
-                    if not self._send_image(content):
-                        logger.error("图片复制失败: {}", content)
-                time.sleep(1.0)
-            except Exception as e:
-                logger.error("发送步骤 {} 失败: {}", i + 1, e)
-        return True
+        def _send_steps() -> bool:
+            for i, step in enumerate(steps):
+                try:
+                    msg_type = step.get("type")
+                    content = step.get("content") or step.get("path") or step.get("url")
+                    if not content:
+                        continue
+                    content = str(content)
 
-    def scan_new_friends_via_contacts(self, feishu, welcome_enabled: bool, welcome_steps: List[dict]) -> int:
+                    if msg_type == "text":
+                        self._send_text(content)
+                    elif msg_type == "link":
+                        title = step.get("title", "")
+                        text = f"{title}\n{content}" if title else content
+                        self._send_text(text)
+                    elif msg_type == "image":
+                        if not self._send_image(content):
+                            logger.error("图片复制失败: {}", content)
+                            return False
+                    if i < len(steps) - 1:
+                        time.sleep(self.welcome_step_delay)
+                except Exception as e:
+                    logger.error("发送步骤 {} 失败: {}", i + 1, e)
+                    return False
+            return True
+
+        attempts = max(0, self.welcome_retry_count) + 1
+        for attempt in range(attempts):
+            if _send_steps():
+                return True
+            if attempt < attempts - 1:
+                logger.warning("欢迎包发送失败，准备重试 {}/{}", attempt + 1, attempts)
+                time.sleep(self.welcome_step_delay)
+        return False
+
+    def scan_new_friends_via_contacts(
+        self,
+        feishu,
+        welcome_enabled: bool,
+        welcome_steps: List[Any],
+    ) -> int:
         """通过通讯录-新的好友扫描并处理新好友"""
-        return self._contacts.scan_new_friends_via_contacts(feishu, welcome_enabled, welcome_steps)
+        handler = getattr(self._contacts, "scan_new_friends_via_contacts")
+        return handler(feishu, welcome_enabled, welcome_steps)
 
     def scan_passive_new_friends(
-        self,
-        keywords: Optional[Sequence[str]] = None,
-        max_chats: Optional[int] = None
+        self, keywords: Optional[Sequence[str]] = None, max_chats: Optional[int] = None
     ) -> List[ContactProfile]:
         """从会话列表被动扫描已添加好友（已废弃，建议使用scan_new_friends_via_contacts）"""
         results: List[ContactProfile] = []
@@ -298,7 +437,11 @@ class WeChatRPA:
             return results
 
         try:
-            items = list(chat_list.GetChildren()) if hasattr(chat_list, 'GetChildren') else []
+            items = (
+                list(chat_list.GetChildren())
+                if hasattr(chat_list, "GetChildren")
+                else []
+            )
             if not items:
                 logger.warning("会话列表为空")
                 return results
@@ -324,12 +467,16 @@ class WeChatRPA:
 
             profile_result = self._profile._open_profile_from_chat(main)
             if not profile_result:
-                fallback_profile = self._profile._fallback_profile_from_header(main, item_name)
+                fallback_profile = self._profile._fallback_profile_from_header(
+                    main, item_name
+                )
                 if fallback_profile:
-                    identifier = f"{fallback_profile.get('wechat_id','')}:{fallback_profile.get('nickname','')}"
+                    identifier = f"{fallback_profile.get('wechat_id', '')}:{fallback_profile.get('nickname', '')}"
                     if identifier not in self._processed_messages:
                         self._processed_messages.add(identifier)
-                        results.append(fallback_profile)
+                        results.append(
+                            cast(ContactProfile, cast(object, fallback_profile))
+                        )
                         logger.info("使用兜底标识记录好友: {}", fallback_profile)
                 continue
 
@@ -338,7 +485,9 @@ class WeChatRPA:
                 if sidebar_rect is None:
                     self._profile._click_avatar_if_possible(profile_win)
 
-                profile = self._profile._extract_profile_info(profile_win, sidebar_rect=sidebar_rect)
+                profile = self._profile._extract_profile_info(
+                    profile_win, sidebar_rect=sidebar_rect
+                )
                 if profile:
                     wechat_id = profile.get("wechat_id", "")
                     nickname = profile.get("nickname", "")
@@ -346,7 +495,7 @@ class WeChatRPA:
 
                     if identifier not in self._processed_messages:
                         self._processed_messages.add(identifier)
-                        results.append(profile)
+                        results.append(cast(ContactProfile, cast(object, profile)))
                         logger.info("发现新的已添加好友: {}", profile)
             finally:
                 try:
@@ -377,8 +526,14 @@ class WeChatRPA:
             rect_str = None
             if rect:
                 rect_str = f"{rect.left},{rect.top},{rect.right},{rect.bottom}"
-            logger.warning("[WeChatFocus] action={} keyword={} handle={} rect={} err={}",
-                          action, keyword, handle, rect_str, exc)
+            logger.warning(
+                "[WeChatFocus] action={} keyword={} handle={} rect={} err={}",
+                action,
+                keyword,
+                handle,
+                rect_str,
+                exc,
+            )
 
         try:
             main.SwitchToThisWindow()
@@ -390,7 +545,7 @@ class WeChatRPA:
             except Exception as focus_exc:
                 _log_focus_warning("SetFocus", focus_exc)
 
-        auto.SendKeys('{Ctrl}f')
+        auto.SendKeys("{Ctrl}f")
         logger.info("已发送 Ctrl+F 激活搜索框")
 
         def _send_keys(text: str) -> None:
@@ -414,7 +569,9 @@ class WeChatRPA:
                 if main.TextControl(SubName=hint, searchDepth=15).Exists(0):
                     return True
             tip_win = self._get_window("提示")
-            if tip_win.Exists(0) and tip_win.TextControl(SubName="无法找到该用户", searchDepth=6).Exists(0):
+            if tip_win.Exists(0) and tip_win.TextControl(
+                SubName="无法找到该用户", searchDepth=6
+            ).Exists(0):
                 return True
             return False
 
@@ -429,16 +586,20 @@ class WeChatRPA:
             network_find.Click()
             clicked = True
         else:
-            network_find_v2 = main.ListItemControl(RegexName="网络查找.*", searchDepth=15)
+            network_find_v2 = main.ListItemControl(
+                RegexName="网络查找.*", searchDepth=15
+            )
             if network_find_v2.Exists(0.5):
                 logger.debug("点击网络查找选项(v2)")
                 network_find_v2.Click()
                 clicked = True
 
         if not clicked:
-            search_list = main.ListControl(AutomationId='search_list')
+            search_list = main.ListControl(AutomationId="search_list")
             if search_list.Exists(0.5):
-                target = search_list.ListItemControl(AutomationId=f'search_item_{keyword}')
+                target = search_list.ListItemControl(
+                    AutomationId=f"search_item_{keyword}"
+                )
                 if target.Exists(0):
                     logger.debug("点击精确匹配的搜索结果: {}", keyword)
                     target.Click()
@@ -452,7 +613,9 @@ class WeChatRPA:
                                 continue
                             if item_aid and not item_aid.startswith("search_item_"):
                                 continue
-                            logger.debug("点击搜索结果项: name={}, aid={}", item_name, item_aid)
+                            logger.debug(
+                                "点击搜索结果项: name={}, aid={}", item_name, item_aid
+                            )
                             item.Click()
                             clicked = True
                             break
@@ -465,7 +628,8 @@ class WeChatRPA:
 
         # 等待资料卡窗口
         profile_win = None
-        end_time = time.time() + 4
+        profile_timeout = max(self.profile_timeout, 1.0)
+        end_time = time.time() + profile_timeout
         while time.time() < end_time:
             for title in self.PROFILE_TITLES:
                 win = self._get_window(title)
@@ -484,12 +648,14 @@ class WeChatRPA:
             return profile_win
 
         # 兜底：检查是否有发消息或添加按钮
-        fallback_deadline = time.time() + 2
+        fallback_deadline = time.time() + min(2.0, profile_timeout)
         while time.time() < fallback_deadline:
             if _has_not_found_message():
                 return None
             msg_exists = main.ButtonControl(Name="发消息", searchDepth=15).Exists(0)
-            add_exists = main.ButtonControl(Name="添加到通讯录", searchDepth=15).Exists(0)
+            add_exists = main.ButtonControl(Name="添加到通讯录", searchDepth=15).Exists(
+                0
+            )
             if msg_exists or add_exists:
                 try:
                     main.SetFocus()
@@ -502,19 +668,24 @@ class WeChatRPA:
 
     # ====================== 委托给操作模块 ======================
 
-    def _find_chat_message_list(self, main_win: auto.WindowControl) -> Optional[auto.Control]:
+    def _find_chat_message_list(
+        self, main_win: auto.WindowControl
+    ) -> Optional[auto.Control]:
         return self._chat._find_chat_message_list(main_win)
 
-    def _find_chat_content_area(self, main_win: auto.WindowControl) -> Optional[auto.Control]:
+    def _find_chat_content_area(
+        self, main_win: auto.WindowControl
+    ) -> Optional[auto.Control]:
         return self._chat._find_chat_content_area(main_win)
 
     def _collect_all_text_from_control(
-        self,
-        control: auto.Control,
-        max_depth: int = 20,
-        current_depth: int = 0
+        self, control: auto.Control, max_depth: int = 20, current_depth: int = 0
     ) -> List[str]:
-        return self._chat._collect_all_text_from_control(control, max_depth, current_depth)
+        return self._chat._collect_all_text_from_control(
+            control, max_depth, current_depth
+        )
 
-    def _chat_has_keywords(self, main_win: auto.WindowControl, keywords: Sequence[str]) -> bool:
+    def _chat_has_keywords(
+        self, main_win: auto.WindowControl, keywords: Sequence[str]
+    ) -> bool:
         return self._chat._chat_has_keywords(main_win, keywords)

@@ -5,7 +5,7 @@
 from __future__ import annotations
 
 import time
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Tuple, cast
 from urllib.parse import parse_qs, urlparse
 
 import requests
@@ -40,6 +40,7 @@ class FeishuClient:
         self._retry_backoff_factor = 2.0  # 重试退避因子
 
         cfg = get_config()
+        self._min_request_interval = float(cfg.get("FEISHU_RATE_LIMIT_COOLDOWN") or 0.5)
         self.app_id = app_id or cfg["FEISHU_APP_ID"]
         self.app_secret = app_secret or cfg["FEISHU_APP_SECRET"]
         self._wiki_token_cache: Dict[str, str] = {}
@@ -66,7 +67,9 @@ class FeishuClient:
         # 使用网络配置的请求方法
         try:
             session = network_config.create_session()
-            logger.debug("获取飞书访问令牌: 网络配置 {}", network_config.get_network_info())
+            logger.debug(
+                "获取飞书访问令牌: 网络配置 {}", network_config.get_network_info()
+            )
             resp = session.post(url, json=payload)
             resp.raise_for_status()
             data = resp.json()
@@ -74,7 +77,9 @@ class FeishuClient:
                 raise RuntimeError(f"获取 tenant_access_token 失败: {data}")
 
         except requests.exceptions.SSLError as ssl_err:
-            logger.error("飞书API SSL连接失败: {} - 可能是网络环境问题或证书问题", ssl_err)
+            logger.error(
+                "飞书API SSL连接失败: {} - 可能是网络环境问题或证书问题", ssl_err
+            )
             raise RuntimeError(f"无法连接到飞书服务器，SSL错误: {ssl_err}")
         except requests.exceptions.ConnectionError as conn_err:
             logger.error("飞书API连接失败: {} - 请检查网络连接", conn_err)
@@ -90,7 +95,9 @@ class FeishuClient:
         expire = int(data.get("expire", 0))
         self._tenant_access_token = token
         self._token_expire_at = now + expire
-        logger.debug("刷新飞书 tenant_access_token 成功，过期时间 {}", self._token_expire_at)
+        logger.debug(
+            "刷新飞书 tenant_access_token 成功，过期时间 {}", self._token_expire_at
+        )
         return token
 
     def _headers(self) -> Dict[str, str]:
@@ -134,7 +141,7 @@ class FeishuClient:
         headers.update(self._headers())
 
         # 使用网络配置创建会话
-        session = kwargs.pop('session', None) or network_config.create_session()
+        session = kwargs.pop("session", None) or network_config.create_session()
 
         # 频率限制：确保最小请求间隔
         current_time = time.time()
@@ -144,45 +151,65 @@ class FeishuClient:
             logger.debug("API频率限制，等待 {:.2f} 秒", sleep_time)
             time.sleep(sleep_time)
 
-        last_exception = None
+        last_exception: Exception | None = None
+        resp: requests.Response | None = None
 
         # 重试机制
         for attempt in range(self._max_retries + 1):
             try:
                 self._last_request_time = time.time()
-                resp = session.request(method, url, headers=headers, **kwargs)
-                resp.raise_for_status()
+                response = cast(
+                    requests.Response,
+                    session.request(method, url, headers=headers, **kwargs),
+                )
+                resp = response
+                response.raise_for_status()
 
-                data = resp.json()
+                data = response.json()
                 if data.get("code") not in (0,):
                     raise RuntimeError(
                         f"飞书接口返回异常 code={data.get('code')} msg={data.get('msg')} data={data}"
                     )
 
-                logger.debug("API请求成功: {} {} (尝试次数: {})", method, url, attempt + 1)
+                logger.debug(
+                    "API请求成功: {} {} (尝试次数: {})", method, url, attempt + 1
+                )
                 return data
 
             except requests.HTTPError as http_err:
                 last_exception = http_err
+                if resp is None:
+                    raise
+                resp = cast(requests.Response, resp)
                 try:
                     body = resp.json()
                 except Exception:
                     body = resp.text
 
                 # 根据错误类型决定是否重试
-                if resp.status_code in (429, 502, 503, 504) and attempt < self._max_retries:
+                if (
+                    resp.status_code in (429, 502, 503, 504)
+                    and attempt < self._max_retries
+                ):
                     # 429 Too Many Requests 或 5xx 服务器错误，适合重试
                     wait_time = self._retry_backoff_factor ** (attempt + 1)
                     logger.warning(
                         "API请求失败 (可重试), 将在 {:.1f} 秒后重试: {} | 状态码: {} | 响应: {}",
-                        wait_time, http_err, resp.status_code, str(body)[:200]
+                        wait_time,
+                        http_err,
+                        resp.status_code,
+                        str(body)[:200],
                     )
                     time.sleep(wait_time)
                     continue
                 else:
                     # 4xx 客户端错误或超过重试次数，直接抛出
-                    logger.error("飞书 HTTP 错误: {} | 状态码: {} | 响应: {}",
-                               http_err, resp.status_code, str(body)[:500])
+                    logger.error(
+                        "飞书 HTTP 错误: {} | 状态码: {} | 响应: {}",
+                        http_err,
+                        resp.status_code,
+                        str(body)[:500],
+                    )
                     raise
 
             except (requests.ConnectionError, requests.Timeout) as conn_err:
@@ -190,7 +217,9 @@ class FeishuClient:
                 # 网络连接错误，适合重试
                 if attempt < self._max_retries:
                     wait_time = self._retry_backoff_factor ** (attempt + 1)
-                    logger.warning("网络连接错误, 将在 {:.1f} 秒后重试: {}", wait_time, conn_err)
+                    logger.warning(
+                        "网络连接错误, 将在 {:.1f} 秒后重试: {}", wait_time, conn_err
+                    )
                     time.sleep(wait_time)
                     continue
                 else:
@@ -199,6 +228,9 @@ class FeishuClient:
 
         # 所有重试都失败了
         logger.error("API请求失败，已达到最大重试次数: {}", last_exception)
+        if last_exception is None:
+            raise RuntimeError("API请求失败，未捕获具体异常")
+        assert last_exception is not None
         raise last_exception
 
     # ========================= 辅助工具 =========================
@@ -220,7 +252,11 @@ class FeishuClient:
             table_id = self._extract_table_id(parsed)
             base_token = self._resolve_wiki_token(wiki_token)
             url = f"https://open.feishu.cn/open-apis/bitable/v1/apps/{base_token}/tables/{table_id}/records"
-            logger.debug("Wiki 链接已换算为表格: wiki_token={} -> base_token={}", wiki_token, base_token)
+            logger.debug(
+                "Wiki 链接已换算为表格: wiki_token={} -> base_token={}",
+                wiki_token,
+                base_token,
+            )
             return url.rstrip("/")
 
         # 正常 API 路径：直接解析 app_token 和 table_id 再重构
@@ -373,12 +409,14 @@ class FeishuClient:
                 }
             }
             logger.debug("按状态拉取任务，payload={}", payload)
-            data = self._request("POST", self.profile_table_url + "/search", json=payload)
+            data = self._request(
+                "POST", self.profile_table_url + "/search", json=payload
+            )
             return data.get("data", {}).get("items", [])
 
         # 多个状态：分别查询后合并（飞书单选字段不支持一次查多个值）
         all_items: List[Dict[str, Any]] = []
-        seen_ids: set = set()
+        seen_ids: set[str] = set()
         for status in values:
             payload = {
                 "filter": {
@@ -394,7 +432,9 @@ class FeishuClient:
             }
             logger.debug("按状态拉取任务 [{}]，payload={}", status, payload)
             try:
-                data = self._request("POST", self.profile_table_url + "/search", json=payload)
+                data = self._request(
+                    "POST", self.profile_table_url + "/search", json=payload
+                )
                 items = data.get("data", {}).get("items", [])
                 for item in items:
                     record_id = self._extract_record_id(item)
@@ -472,7 +512,14 @@ class FeishuClient:
             return None
         return self._extract_record_id(items[0])
 
-    def upsert_contact_profile(self, wechat_id: str, nickname: str | None = None, phone: str | None = None, remark: str | None = None, status: str | None = None) -> str:
+    def upsert_contact_profile(
+        self,
+        wechat_id: str,
+        nickname: str | None = None,
+        phone: str | None = None,
+        remark: str | None = None,
+        status: str | None = None,
+    ) -> str:
         """
         将微信号/手机号写入飞书，若已存在则更新，否则创建记录。
         若指定 status，则同时更新"微信绑定状态"字段。
@@ -516,7 +563,11 @@ class FeishuClient:
                 if status:
                     update_fields["微信绑定状态"] = status
                 self.update_record(record_id, update_fields)
-                logger.debug("被动写入：按手机号找到并更新记录 {} -> {}", record_id, update_fields)
+                logger.debug(
+                    "被动写入：按手机号找到并更新记录 {} -> {}",
+                    record_id,
+                    update_fields,
+                )
                 return record_id
 
         # 2. 按昵称搜索（用于被动加好友时匹配主动添加的记录）
@@ -531,7 +582,9 @@ class FeishuClient:
                 if status:
                     update_fields["微信绑定状态"] = status
                 self.update_record(record_id, update_fields)
-                logger.debug("被动写入：按昵称找到并更新记录 {} -> {}", record_id, update_fields)
+                logger.debug(
+                    "被动写入：按昵称找到并更新记录 {} -> {}", record_id, update_fields
+                )
                 return record_id
 
         # 3. 都找不到，新建记录
