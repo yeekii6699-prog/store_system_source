@@ -1,14 +1,15 @@
 from __future__ import annotations
 
 import time
+import traceback
 
 from loguru import logger
 
 from src.config.logger import setup_logger
 from src.config.settings import get_config
 from src.core.engine import TaskEngine
-from src.core.system import check_environment, configure_dpi_awareness, run_self_check
-from src.ui.console import ConsoleApp
+from src.core.system import configure_dpi_awareness
+from src.ui.flet_error import show_error_page
 
 
 def main() -> None:
@@ -16,24 +17,21 @@ def main() -> None:
     configure_dpi_awareness()
 
     cfg = get_config()
-    env_ok, errors, warnings = check_environment(cfg)
-    for warn in warnings:
-        logger.warning("环境自检提示：{}", warn)
-    if not env_ok:
-        ConsoleApp.show_env_error(errors)
-        raise RuntimeError("环境检测失败")
+    try:
+        engine = TaskEngine(cfg)
 
-    run_self_check()
-
-    engine = TaskEngine(cfg)
-    app = ConsoleApp(engine)
-    app.run()
+        from src.ui.flet_app import FletApp
+        app = FletApp(engine)
+        app.run()
+    except Exception as exc:
+        logger.critical(f"程序崩溃退出: {exc}")
+        logger.critical(f"详细错误:\n{traceback.format_exc()}")
+        show_error_page("启动失败", [str(exc)])
+        time.sleep(2)
 
 
 if __name__ == "__main__":
     try:
         main()
-    except Exception as exc:
-        logger.critical(f"程序崩溃退出: {exc}")
-        time.sleep(5)
-        raise
+    except Exception:
+        pass
