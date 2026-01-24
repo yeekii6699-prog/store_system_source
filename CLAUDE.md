@@ -20,93 +20,169 @@
 | GUI | Tkinter |
 | 日志 | loguru |
 
-## 快速开始
+## 常用命令
 
 ```bash
 # 安装依赖
 pip install -r requirements.txt
 
-# 运行程序
+# 运行程序（开发模式）
 python -m src.main
 
-# 启动器（带自动更新）
+# 运行启动器（带自动更新）
 python launcher.py
 
 # 检查飞书表格结构
 python -m src.utils.table_inspector
+
+# UI 控件调试（鼠标悬停3秒输出控件信息）
+python ui_probe.py
+
+# 打包成 exe（需先安装 pyinstaller）
+pyinstaller --onefile --name main_bot --clean src/main.py
+# 或使用 specs 文件
+pyinstaller main_bot.spec
 ```
 
-## 项目结构
+## 架构概览
+
+### 核心模块
 
 ```
-src/
-├── main.py              # 入口点
-├── config/
-│   ├── settings.py      # GUI 配置与持久化
-│   ├── logger.py        # 日志与飞书 webhook
-│   └── network.py       # 网络配置与 SSL
-├── core/
+src/main.py              # 入口：初始化日志 → 系统自检 → 启动 GUI 控制台
+├── src/config/          # 配置层
+│   ├── settings.py      # GUI 配置持久化 (config.ini)
+│   ├── logger.py        # 日志 & 飞书 webhook 告警
+│   └── network.py       # 网络配置与 SSL 代理
+├── src/core/            # 业务核心
 │   ├── system.py        # DPI、自检、环境检测
-│   └── engine.py        # 任务引擎（双队列处理）
-├── services/
-│   ├── feishu.py        # 飞书客户端
-│   └── wechat.py        # 微信 RPA
-├── ui/
-│   └── console.py       # Tk 控制台
-└── utils/
-    └── table_inspector.py # 飞书表格结构工具
+│   └── engine.py        # TaskEngine（双线程任务引擎）
+└── src/services/        # 外部服务
+    ├── feishu.py        # 飞书多维表格 API 客户端
+    ├── wechat.py        # 微信 RPA 主类（业务流程编排）
+    ├── wechat_ui.py     # UI 操作基类（窗口、按钮、对话框）
+    ├── wechat_profile.py # 资料卡操作
+    ├── wechat_chat.py   # 聊天消息操作
+    └── wechat_contacts.py # 通讯录操作（新的朋友、验证）
+```
 
-launcher.py              # 自动更新启动器
-ui_probe.py              # UI 调试工具
+### 微信 RPA 组合模式设计
+
+`WeChatRPA` 主类采用组合模式，将具体操作委托给各专门模块：
+
+| 模块 | 职责 | 关键方法 |
+|-----|------|---------|
+| `wechat.py` | 主类，业务流程编排 | `check_relationship()`, `apply_friend()`, `send_welcome_package()` |
+| `wechat_ui.py` | UI 操作基类 | `_activate_window()`, `_click_button()`, `_send_text()`, `_send_image()` |
+| `wechat_profile.py` | 资料卡操作 | `_extract_nickname_from_profile()`, `_open_profile_from_chat()` |
+| `wechat_chat.py` | 聊天消息操作 | `_find_chat_message_list()`, `_chat_has_keywords()` |
+| `wechat_contacts.py` | 通讯录操作 | `scan_new_friends_via_contacts()`, `_process_verified_friend()`, `_process_pending_verification()` |
+
+这种设计的好处：职责分离、易于维护、模块可独立测试。
+
+### 双线程并发模型
+
+`TaskEngine` 启动两个后台线程：
+
+| 线程 | 职责 | 触发方式 |
+|-----|------|---------|
+| `task-engine` | 飞书轮询 + 主动添加好友 | 每 5 秒检查"待添加"任务 |
+| `passive-monitor` | 监控"新的好友"列表 | 每 30 秒扫描通讯录 |
+
+两线程共享 `wechat_lock`，确保同一时间只有一个线程操作微信 UI。
+
+### 线程安全与 COM 资源管理
+
+- 每个线程（`task-engine` 和 `passive-monitor`）**独立初始化 COM**：`pythoncom.CoInitialize()`
+- 退出时必须调用 `pythoncom.CoUninitialize()`，否则资源泄漏
+- `wechat_lock` 是类级别的 `threading.Lock`，确保 UI 操作互斥
+- 暂停时会释放 COM 资源，恢复时重新初始化
+
+### 数据流
+
+```
+飞书任务表 ──轮询──> TaskEngine._handle_apply_queue()
+                               │
+                               ▼
+                        微信搜索手机号 ──点击"添加到通讯录"──> 更新飞书"已申请"
+                               │
+                               ▼
+                        被动监控 (scan_new_friends_via_contacts)
+                               │
+                               ▼
+                        匹配飞书记录 ──发送welcome──> 更新飞书"已绑定"
+```
+
+### 飞书表格状态流转
+
+```
+待添加 ──主动添加成功──> 已申请 ──被动通过验证──> 已绑定
+                │
+                └──已是好友──> 已绑定
 ```
 
 ## 核心概念
 
-### 双队列系统
+### 主动添加（申请队列）
 
-| 队列 | 来源 | 状态流转 |
-|-----|------|---------|
-| 申请队列 | 飞书任务表"待添加" | 待添加 → 已申请 → 已绑定 |
-| 欢迎队列 | 飞书任务表"已申请"/"未发送" | 未发送 → 已绑定 |
+从飞书拉取"待添加"状态的记录：
+1. 微信搜索手机号
+2. 判断好友关系：
+   - 已是好友 → 直接发送 welcome → "已绑定"
+   - 陌生人 → 发送好友申请 → "已申请"
+   - 未找到 → "未找到"
 
 ### 被动监控（新的好友）
 
-通过微信「通讯录 → 新的好友 → 等待验证」监控新好友请求：
+通过微信「通讯录 → 新的朋友 → 等待验证」监控，采用**两阶段处理**：
 
-```
-点击通讯录 → 点击新的朋友 → 遍历等待验证列表 → 点击前往验证 → 点击确定 → 获取微信号 → 写入飞书(未发送) → 返回聊天列表
+**第一阶段**：处理所有"已添加"的好友（我主动添加后对方通过）
+- 点击列表项 → 获取微信号 → 写入飞书 → 发送 welcome → 删除记录
+
+**第二阶段**：处理所有"等待验证"的好友（对方加我）
+- 点击列表项 → 点击"前往验证" → 获取微信号 → 写入飞书 → 发送 welcome → 删除记录
+
+### 飞书 Upsert 搜索优先级
+
+`FeishuClient.upsert_contact_profile()` 的搜索逻辑优先级：
+1. **先按手机号搜索**（如果有手机号）
+2. **再按昵称搜索**（用于被动加好友时匹配主动添加的记录）
+3. **都找不到才新建**
+
+### 欢迎包
+
+支持 JSON 配置多步骤欢迎内容：
+```json
+[
+  {"type": "text", "content": "欢迎语"},
+  {"type": "image", "path": "D:\\guide\\a.png"},
+  {"type": "link", "url": "https://...", "title": "标题"}
+]
 ```
 
-- 监控频率可在 GUI 实时调节（5-300秒）
-- 无需额外去重，微信通过好友后自动从列表移除
+### 网络环境自动检测
+
+`NetworkConfig` 自动检测：
+- 系统代理
+- VPN/代理环境（通过环境变量和系统代理判断）
+- VPN 环境下增加超时时间并使用宽松 SSL 配置
+- 支持手动配置代理、禁用 SSL 验证
 
 ## 配置说明
 
-### 必需环境变量
+必需的环境变量配置在 `.env.example` 中，GUI 会引导填写。
 
 | 变量 | 说明 |
 |-----|------|
-| `FEISHU_APP_ID` | 飞书应用 ID |
-| `FEISHU_APP_SECRET` | 飞书应用密钥 |
-| `FEISHU_TABLE_URL` | 任务表 URL |
-| `FEISHU_PROFILE_TABLE_URL` | 客户档案表 URL |
+| `FEISHU_APP_ID` / `FEISHU_APP_SECRET` | 飞书应用凭证 |
+| `FEISHU_TABLE_URL` / `FEISHU_PROFILE_TABLE_URL` | 任务表和客户档案表链接（支持 Wiki 链接自动转换） |
+| `WECHAT_EXEC_PATH` | 微信可执行文件路径（可选） |
+| `WELCOME_ENABLED` | 是否启用欢迎包 (0/1) |
+| `WELCOME_STEPS` | JSON 格式的欢迎步骤（支持 text/image/link） |
+| `NEW_FRIEND_SCAN_INTERVAL` | 被动监控间隔，默认 30 秒 |
+| `FEISHU_WEBHOOK_URL` | 错误告警推送地址 |
 
-### 可选配置
-
-| 变量 | 默认值 | 说明 |
-|-----|-------|------|
-| `WECHAT_EXEC_PATH` | - | 微信可执行文件路径 |
-| `WELCOME_ENABLED` | 0 | 是否启用欢迎包 |
-| `WELCOME_TEXT` | - | 欢迎文案（多行用 `\n` 分隔） |
-| `WELCOME_IMAGE_PATHS` | - | 图片路径（多张用 `|` 分隔） |
-| `NEW_FRIEND_SCAN_INTERVAL` | 30 | 新的好友监控间隔(秒) |
-| `PASSIVE_SCAN_JITTER` | 5 | 扫描间隔随机抖动(秒) |
-| `FEISHU_WEBHOOK_URL` | - | 飞书 webhook URL（告警推送） |
-| `VERSION_URL` | - | 远程版本号地址（启动器） |
-| `ZIP_URL` | - | 远程压缩包地址（启动器） |
-| `SKIP_CONFIG_UI` | 0 | 跳过 GUI 配置界面 |
-
-> **提示**：运行 `python -m src.main` 后会自动弹出配置 GUI，监控频率可在运行时实时调整。
+GUI 可实时调节：监控频率、抖动时间、飞书轮询间隔、欢迎包开关。
 
 ## 开发规范
 
@@ -145,25 +221,14 @@ chore: 其他修改
 
 ## 常见问题
 
-### 微信 RPA 失败
+| 问题 | 排查方向 |
+|-----|---------|
+| 微信 RPA 无响应 | 微信窗口需在前台可见；检查 DEBUG 日志 |
+| 飞书 API 错误 | 检查网络/代理；验证凭证；确认应用权限 |
+| 打包 PermissionError | 关闭杀毒软件或结束旧进程 |
+| 更新后仍是旧版本 | 删除 `local_version.txt` |
 
-1. 检查微信是否运行
-2. 确认 UI 自动化权限
-3. 尝试配置 `WECHAT_EXEC_PATH`
-
-### 飞书 API 错误
-
-1. 检查网络连接
-2. 验证 `FEISHU_APP_ID` 和 `FEISHU_APP_SECRET`
-3. 确认应用已开通必要权限
-
-### 新的好友监控无响应
-
-1. 检查"新的朋友"列表是否可正常展开/收起
-2. 确认微信窗口在前台且可见
-3. 查看 DEBUG 级别日志排查
-
-### 相关文件
+## 相关文件
 
 - [README.md](./README.md) - 完整使用文档
 - [RELEASE_GUIDE.md](./RELEASE_GUIDE.md) - 发布与回滚指南
