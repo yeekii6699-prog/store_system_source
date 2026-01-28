@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import sys
+from typing import Any
 import time
 import traceback
 
@@ -13,6 +15,15 @@ from src.ui.flet_error import show_error_page
 
 
 def main() -> None:
+    try:
+        stdout_reconfigure = getattr(sys.stdout, "reconfigure", None)
+        stderr_reconfigure = getattr(sys.stderr, "reconfigure", None)
+        if callable(stdout_reconfigure):
+            stdout_reconfigure(encoding="utf-8", errors="replace")
+        if callable(stderr_reconfigure):
+            stderr_reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
     setup_logger()
     configure_dpi_awareness()
 
@@ -21,6 +32,7 @@ def main() -> None:
         engine = TaskEngine(cfg)
 
         from src.ui.flet_app import FletApp
+
         app = FletApp(engine)
         app.run()
     except Exception as exc:

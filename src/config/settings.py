@@ -47,6 +47,8 @@ FIELD_LABELS: Dict[str, str] = {
     "ALERT_COOLDOWN": "告警推送冷却（秒）",
     "WELCOME_STEP_DELAY": "欢迎步骤间隔（秒）",
     "WELCOME_RETRY_COUNT": "欢迎失败重试次数",
+    "MONITOR_KEYWORDS": "监控关键词（逗号分隔）",
+    "MAX_CHATS": "最大聊天窗口数",
     "RELATIONSHIP_DETECT_TIMEOUT": "关系检测超时（秒）",
     "PROFILE_WAIT_TIMEOUT": "资料卡等待超时（秒）",
     "BUTTON_FIND_TIMEOUT": "按钮查找超时（秒）",
@@ -202,6 +204,12 @@ def _collect_defaults() -> Dict[str, str]:
         "WELCOME_RETRY_COUNT": (
             os.getenv("WELCOME_RETRY_COUNT")
             or default_section.get("WELCOME_RETRY_COUNT", "0")
+        ).strip(),
+        "MONITOR_KEYWORDS": (
+            os.getenv("MONITOR_KEYWORDS") or default_section.get("MONITOR_KEYWORDS", "")
+        ).strip(),
+        "MAX_CHATS": (
+            os.getenv("MAX_CHATS") or default_section.get("MAX_CHATS", "6")
         ).strip(),
         "RELATIONSHIP_DETECT_TIMEOUT": (
             os.getenv("RELATIONSHIP_DETECT_TIMEOUT")

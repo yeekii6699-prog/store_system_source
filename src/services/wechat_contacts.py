@@ -39,9 +39,13 @@ class WeChatContactsOperations:
 
     def _click_contacts_tab(self) -> bool:
         """点击侧边栏'通讯录' Tab"""
-        return self._owner._click_button(
+        success = self._owner._click_button(
             "通讯录", timeout=2, search_depth=8, class_name="mmui::XTabBarItem"
         )
+        if not success:
+            logger.error("未找到'通讯录' Tab，触发截屏告警")
+            self._owner._report_wechat_not_found("未找到'通讯录' Tab")
+        return success
 
     def _return_to_chat_list(self) -> bool:
         """返回聊天列表界面"""

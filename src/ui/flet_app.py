@@ -112,7 +112,7 @@ class FletApp:
     def build(self, page: ft.Page) -> None:
         self.page = page
 
-        page.title = "门店数字化运营系统"
+        page.title = "MX助手"
         page.theme_mode = ft.ThemeMode.LIGHT
         setattr(page, "window_width", 1200)
         setattr(page, "window_height", 800)
@@ -143,7 +143,7 @@ class FletApp:
             horizontal_alignment=ft.CrossAxisAlignment.START,
             spacing=0,
         )
-        self.content_area.controls.append(self._build_operation_settings())
+        self.content_area.controls.append(self._build_dashboard())
         main_row.controls.append(self.content_area)
 
         page.add(main_row)
@@ -153,7 +153,7 @@ class FletApp:
 
     def _build_nav_rail(self) -> ft.NavigationRail:
         return ft.NavigationRail(
-            selected_index=2,
+            selected_index=0,
             label_type=ft.NavigationRailLabelType.ALL,
             min_width=100,
             min_extended_width=200,
@@ -161,7 +161,7 @@ class FletApp:
                 [
                     ft.Icon(ft.Icons.STORE, size=40, color=self.PRIMARY_COLOR),
                     ft.Text(
-                        "门店系统",
+                        "MX助手",
                         size=14,
                         weight=ft.FontWeight.BOLD,
                         color=self.TEXT_PRIMARY,
@@ -217,7 +217,7 @@ class FletApp:
                                 color=self.TEXT_PRIMARY,
                             ),
                             ft.Text(
-                                "系统运行正常，正在监控飞书任务",
+                                "欢迎体验 MX助手2.3.2",
                                 size=14,
                                 color=self.TEXT_SECONDARY,
                             ),
@@ -545,18 +545,6 @@ class FletApp:
                 value=cfg.get("WECHAT_EXEC_PATH", "")
             )
 
-        if self.welcome_steps_view is None:
-            self.welcome_steps_data = self._load_welcome_steps_from_config(cfg)
-            self.welcome_steps_view = ft.Column(spacing=8)
-        self._refresh_welcome_steps_view()
-
-        if self.welcome_switch:
-            self.welcome_switch.value = (cfg.get("WELCOME_ENABLED") or "0") == "1"
-        else:
-            self.welcome_switch = ft.Switch(
-                value=(cfg.get("WELCOME_ENABLED") or "0") == "1"
-            )
-
         if not self.config_status_text:
             self.config_status_text = ft.Text("", size=12, color=ft.Colors.GREY_600)
 
@@ -769,12 +757,21 @@ class FletApp:
                     spacing=8,
                 ),
                 ft.Text(
-                    "飞书 App 与表格链接修改后需重启引擎/程序生效。",
+                    "修改后请先保存配置，再检查连接。",
                     size=12,
                     color=ft.Colors.GREY_600,
                 ),
                 ft.Row(
                     [
+                        ft.ElevatedButton(
+                            "保存配置",
+                            bgcolor=ft.Colors.TEAL_500,
+                            color=ft.Colors.WHITE,
+                            style=ft.ButtonStyle(
+                                shape=ft.RoundedRectangleBorder(radius=8)
+                            ),
+                            on_click=lambda e: self._save_feishu_config(),
+                        ),
                         ft.ElevatedButton(
                             "检查连接",
                             bgcolor=self.PRIMARY_COLOR,
@@ -1039,6 +1036,18 @@ class FletApp:
                     ],
                     spacing=8,
                 ),
+                ft.Text(
+                    "告警配置修改后请点击下方按钮保存。",
+                    size=12,
+                    color=ft.Colors.GREY_600,
+                ),
+                ft.ElevatedButton(
+                    "保存告警配置",
+                    bgcolor=ft.Colors.TEAL_500,
+                    color=ft.Colors.WHITE,
+                    style=ft.ButtonStyle(shape=ft.RoundedRectangleBorder(radius=8)),
+                    on_click=lambda e: self._save_alert_config(),
+                ),
             ],
         )
         content.controls.append(log_card)
@@ -1095,99 +1104,6 @@ class FletApp:
         )
         content.controls.append(poll_card)
 
-        welcome_card = self._build_setting_card(
-            title="欢迎包配置",
-            settings=[
-                ft.Row(
-                    [
-                        ft.Text(
-                            "启用自动欢迎包",
-                            size=14,
-                            weight=ft.FontWeight.W_500,
-                            color=self.TEXT_PRIMARY,
-                        ),
-                        self.welcome_switch,
-                    ],
-                    alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
-                ),
-                ft.Row(
-                    [
-                        ft.ElevatedButton(
-                            "新增步骤",
-                            bgcolor=self.PRIMARY_COLOR,
-                            color=ft.Colors.WHITE,
-                            style=ft.ButtonStyle(
-                                shape=ft.RoundedRectangleBorder(radius=8)
-                            ),
-                            on_click=lambda e: self._open_welcome_step_dialog(None),
-                        ),
-                        ft.OutlinedButton(
-                            "清空步骤",
-                            on_click=lambda e: self._clear_welcome_steps(),
-                        ),
-                    ],
-                    spacing=12,
-                ),
-                ft.Container(
-                    content=self.welcome_steps_view,
-                    padding=12,
-                    border_radius=10,
-                    bgcolor=ft.Colors.GREY_50,
-                ),
-                ft.Text(
-                    "支持文字/图片/链接步骤，可用上下按钮调整顺序。",
-                    size=12,
-                    color=ft.Colors.GREY_600,
-                ),
-            ],
-        )
-        content.controls.append(welcome_card)
-
-        # 欢迎包设置卡片
-        welcome_detail_card = self._build_setting_card(
-            title="欢迎包设置",
-            settings=[
-                ft.Row(
-                    [
-                        ft.Column(
-                            [
-                                ft.Text(
-                                    "欢迎步骤间隔（秒）",
-                                    size=14,
-                                    color=self.TEXT_PRIMARY,
-                                ),
-                                self.welcome_step_delay_input
-                                if self.welcome_step_delay_input
-                                else ft.TextField(
-                                    value=cfg.get("WELCOME_STEP_DELAY", "1.0"),
-                                    width=100,
-                                    text_align=ft.TextAlign.CENTER,
-                                ),
-                            ],
-                            spacing=8,
-                        ),
-                        ft.Column(
-                            [
-                                ft.Text(
-                                    "欢迎失败重试次数", size=14, color=self.TEXT_PRIMARY
-                                ),
-                                self.welcome_retry_count_input
-                                if self.welcome_retry_count_input
-                                else ft.TextField(
-                                    value=cfg.get("WELCOME_RETRY_COUNT", "0"),
-                                    width=100,
-                                    text_align=ft.TextAlign.CENTER,
-                                ),
-                            ],
-                            spacing=8,
-                        ),
-                    ],
-                    spacing=30,
-                ),
-            ],
-        )
-        content.controls.append(welcome_detail_card)
-
         content.controls.append(
             ft.Row(
                 [
@@ -1243,6 +1159,140 @@ class FletApp:
         content.controls.append(header)
 
         cfg = get_config()
+
+        # 欢迎包配置卡片
+        if self.welcome_switch:
+            self.welcome_switch.value = (cfg.get("WELCOME_ENABLED") or "0") == "1"
+        else:
+            self.welcome_switch = ft.Switch(
+                value=(cfg.get("WELCOME_ENABLED") or "0") == "1"
+            )
+
+        if self.welcome_steps_view is None:
+            self.welcome_steps_data = self._load_welcome_steps_from_config(cfg)
+            self.welcome_steps_view = ft.Column(spacing=8)
+        self._refresh_welcome_steps_view()
+
+        welcome_card = self._build_setting_card(
+            title="欢迎包配置",
+            settings=[
+                ft.Row(
+                    [
+                        ft.Text(
+                            "启用自动欢迎包",
+                            size=14,
+                            weight=ft.FontWeight.W_500,
+                            color=self.TEXT_PRIMARY,
+                        ),
+                        self.welcome_switch,
+                    ],
+                    alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+                ),
+                ft.Row(
+                    [
+                        ft.ElevatedButton(
+                            "新增步骤",
+                            bgcolor=self.PRIMARY_COLOR,
+                            color=ft.Colors.WHITE,
+                            style=ft.ButtonStyle(
+                                shape=ft.RoundedRectangleBorder(radius=8)
+                            ),
+                            on_click=lambda e: self._open_welcome_step_dialog(None),
+                        ),
+                        ft.OutlinedButton(
+                            "清空步骤",
+                            on_click=lambda e: self._clear_welcome_steps(),
+                        ),
+                        ft.ElevatedButton(
+                            "保存配置",
+                            bgcolor=ft.Colors.TEAL_500,
+                            color=ft.Colors.WHITE,
+                            style=ft.ButtonStyle(
+                                shape=ft.RoundedRectangleBorder(radius=8)
+                            ),
+                            on_click=lambda e: self._save_welcome_config(),
+                        ),
+                    ],
+                    spacing=12,
+                ),
+                ft.Container(
+                    content=self.welcome_steps_view,
+                    padding=12,
+                    border_radius=10,
+                    bgcolor=ft.Colors.GREY_50,
+                ),
+                ft.Text(
+                    "支持文字/图片/链接步骤，可用上下按钮调整顺序。",
+                    size=12,
+                    color=ft.Colors.GREY_600,
+                ),
+            ],
+        )
+        content.controls.append(welcome_card)
+
+        # 欢迎包设置卡片
+        if self.welcome_step_delay_input:
+            self.welcome_step_delay_input.value = cfg.get("WELCOME_STEP_DELAY", "1.0")
+        else:
+            self.welcome_step_delay_input = ft.TextField(
+                value=cfg.get("WELCOME_STEP_DELAY", "1.0"),
+                width=100,
+                text_align=ft.TextAlign.CENTER,
+            )
+
+        if self.welcome_retry_count_input:
+            self.welcome_retry_count_input.value = cfg.get("WELCOME_RETRY_COUNT", "0")
+        else:
+            self.welcome_retry_count_input = ft.TextField(
+                value=cfg.get("WELCOME_RETRY_COUNT", "0"),
+                width=100,
+                text_align=ft.TextAlign.CENTER,
+            )
+
+        welcome_detail_card = self._build_setting_card(
+            title="欢迎包设置",
+            settings=[
+                ft.Row(
+                    [
+                        ft.Column(
+                            [
+                                ft.Text(
+                                    "欢迎步骤间隔（秒）",
+                                    size=14,
+                                    color=self.TEXT_PRIMARY,
+                                ),
+                                self.welcome_step_delay_input
+                                if self.welcome_step_delay_input
+                                else ft.TextField(
+                                    value=cfg.get("WELCOME_STEP_DELAY", "1.0"),
+                                    width=100,
+                                    text_align=ft.TextAlign.CENTER,
+                                ),
+                            ],
+                            spacing=8,
+                        ),
+                        ft.Column(
+                            [
+                                ft.Text(
+                                    "欢迎失败重试次数", size=14, color=self.TEXT_PRIMARY
+                                ),
+                                self.welcome_retry_count_input
+                                if self.welcome_retry_count_input
+                                else ft.TextField(
+                                    value=cfg.get("WELCOME_RETRY_COUNT", "0"),
+                                    width=100,
+                                    text_align=ft.TextAlign.CENTER,
+                                ),
+                            ],
+                            spacing=8,
+                        ),
+                    ],
+                    spacing=30,
+                ),
+            ],
+        )
+        content.controls.append(welcome_detail_card)
+
         monitor_value = str(int(float(cfg.get("NEW_FRIEND_SCAN_INTERVAL", "30"))))
         if self.monitor_interval_input:
             self.monitor_interval_input.value = monitor_value
@@ -1821,6 +1871,11 @@ class FletApp:
         # 应用告警配置
         self.engine.alert_cooldown = int(cfg.get("ALERT_COOLDOWN") or 60)
 
+        # 应用飞书轮询间隔
+        self.engine.feishu_poll_interval = max(
+            3.0, float(cfg.get("FEISHU_POLL_INTERVAL") or 5)
+        )
+
         if self.engine.feishu:
             self.engine.feishu._min_request_interval = (
                 self.engine.feishu_rate_limit_cooldown
@@ -1856,6 +1911,91 @@ class FletApp:
         network_config.reload()
         self._apply_config_to_engine(cfg, steps)
         self._show_snackbar("配置已保存")
+
+    def _save_feishu_config(self) -> None:
+        """只保存飞书相关配置"""
+        values = {
+            "FEISHU_APP_ID": (
+                self.feishu_app_id_input.value if self.feishu_app_id_input else ""
+            ).strip(),
+            "FEISHU_APP_SECRET": (
+                self.feishu_app_secret_input.value
+                if self.feishu_app_secret_input
+                else ""
+            ).strip(),
+            "FEISHU_TABLE_URL": (
+                self.feishu_table_url_input.value if self.feishu_table_url_input else ""
+            ).strip(),
+            "FEISHU_PROFILE_TABLE_URL": (
+                self.feishu_profile_table_url_input.value
+                if self.feishu_profile_table_url_input
+                else ""
+            ).strip(),
+        }
+
+        missing = validate_required_config(values)
+        if missing:
+            missing_labels = [FIELD_LABELS.get(key, key) for key in missing]
+            self._show_snackbar(f"缺少必填配置: {', '.join(missing_labels)}")
+            return
+
+        cfg = update_config(values, persist=True)
+        network_config.reload()
+        self._apply_config_to_engine(cfg, [])
+        self._show_snackbar("飞书配置已保存")
+
+    def _save_alert_config(self) -> None:
+        """只保存日志与告警相关配置"""
+        values = {
+            "LOG_RETENTION_DAYS": (
+                self.log_retention_input.value if self.log_retention_input else "7"
+            ).strip(),
+            "LOG_LEVEL": (
+                (self.log_level_dropdown.value or "INFO")
+                if self.log_level_dropdown
+                else "INFO"
+            ).strip(),
+            "FEISHU_WEBHOOK_URL": (
+                self.webhook_url_input.value if self.webhook_url_input else ""
+            ).strip(),
+            "ALERT_COOLDOWN": (
+                self.alert_cooldown_input.value if self.alert_cooldown_input else "60"
+            ).strip(),
+        }
+
+        cfg = update_config(values, persist=True)
+        self._show_snackbar("告警配置已保存")
+
+    def _save_welcome_config(self) -> None:
+        """只保存欢迎包相关配置"""
+        welcome_enabled = (
+            bool(self.welcome_switch.value) if self.welcome_switch else False
+        )
+        steps = list(self.welcome_steps_data)
+
+        values = {
+            "WELCOME_ENABLED": "1" if welcome_enabled else "0",
+            "WELCOME_STEPS": json.dumps(steps, ensure_ascii=False) if steps else "",
+            "WELCOME_STEP_DELAY": (
+                self.welcome_step_delay_input.value
+                if self.welcome_step_delay_input
+                else "1.0"
+            ).strip(),
+            "WELCOME_RETRY_COUNT": (
+                self.welcome_retry_count_input.value
+                if self.welcome_retry_count_input
+                else "0"
+            ).strip(),
+        }
+
+        if welcome_enabled and not steps:
+            self._show_snackbar("启用欢迎包后至少配置一条步骤")
+            return
+
+        cfg = update_config(values, persist=True)
+        network_config.reload()
+        self._apply_config_to_engine(cfg, steps)
+        self._show_snackbar("欢迎包配置已保存")
 
     def _check_feishu_connection(self) -> None:
         if not self.page:

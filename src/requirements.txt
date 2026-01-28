@@ -1,0 +1,6 @@
+requests
+uiautomation
+loguru
+python-dotenv
+flet
+certifi

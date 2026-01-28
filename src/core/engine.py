@@ -122,7 +122,9 @@ class TaskEngine:
         self.passive_scan_jitter: float = float(
             self.cfg.get("PASSIVE_SCAN_JITTER") or 5
         )  # 减少抖动时间
-        self.feishu_poll_interval: float = 5.0  # 飞书轮询间隔，默认5秒
+        self.feishu_poll_interval: float = float(
+            self.cfg.get("FEISHU_POLL_INTERVAL") or 5
+        )  # 飞书轮询间隔，默认5秒
         # 统计计数器
         self.apply_count = 0  # 申请处理数
         self.welcome_count = 0  # 欢迎发送数

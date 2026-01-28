@@ -202,6 +202,10 @@ class WeChatRPA:
     ) -> None:
         return self._ui._random_delay(min_sec, max_sec)
 
+    def _report_wechat_not_found(self, reason: str) -> None:
+        """报告微信未找到错误并触发截屏告警"""
+        self._ui._report_wechat_not_found(reason)
+
     def _extract_nickname_from_profile(
         self, profile_win: auto.WindowControl
     ) -> Optional[str]:
