@@ -72,6 +72,7 @@ class WeChatProfileOperations:
             avatar = profile_win.ImageControl(RegexName="avatar|头像", searchDepth=12)
             if avatar.Exists(0.3):
                 try:
+                    self._owner._activate_window()
                     avatar.Click()
                     logger.debug("点击头像控件成功")
                     time.sleep(0.5)
@@ -96,6 +97,7 @@ class WeChatProfileOperations:
                 try:
                     rect = ctrl.BoundingRectangle
                     if rect.width() > 40 and rect.width() < 400 and rect.height() < 400:
+                        self._owner._activate_window()
                         ctrl.Click()
                         logger.debug("通过 ContactProfileView 容器点击头像区域")
                         time.sleep(0.5)

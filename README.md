@@ -227,6 +227,64 @@ WELCOME_IMAGE_PATHS=D:\guide\a.png|D:\guide\b.jpg
 | `NETWORK_TIMEOUT` | 请求超时时间（秒） | `15` |
 | `NETWORK_USE_SYSTEM_PROXY` | 使用系统代理 | `0` (禁用) |
 
+### 激活码配置
+
+首次启动需要激活码，程序会在概览页提示输入。
+
+| 变量 | 说明 | 示例 |
+|:-----|:-----|:-----|
+| `ACTIVATION_TABLE_URL` | 激活码表链接（飞书多维表格） | `https://open.feishu.cn/open-apis/bitable/v1/apps/.../tables/.../records` |
+| `ACTIVATION_CODE` | 已激活的激活码 | `A1B2-C3D4-E5F6-G7H8` |
+| `ACTIVATION_MACHINE_ID` | 机器码（自动生成） | `550e8400-e29b-41d4-a716-446655440000` |
+| `ACTIVATION_STATUS` | 激活状态（自动写入） | `activated` |
+| `ACTIVATION_EXPIRY` | 到期时间（自动写入） | `2026-01-30 10:00:00` |
+
+#### 激活码生成工具
+
+```bash
+# 生成10个365天有效期的激活码
+python -m src.tools.activation_manager generate --count 10 --validity-days 365
+
+# 生成5个30天有效期的激活码
+python -m src.tools.activation_manager generate --count 5 --validity-days 30
+```
+
+### 自动回访配置
+
+自动回访按“最近到店时间 OR 最近消费时间”触发，支持 AI 生成回访消息。
+
+| 变量 | 说明 | 默认值 |
+|:-----|:-----|:------:|
+| `FOLLOWUP_ENABLED` | 启用自动回访 | `0` |
+| `FOLLOWUP_DRY_RUN` | 仅生成不发送 | `0` |
+| `FOLLOWUP_POLL_INTERVAL` | 回访轮询间隔（秒） | `300` |
+| `FOLLOWUP_BATCH_LIMIT` | 单轮处理上限 | `5` |
+| `FOLLOWUP_VISIT_DELAY_DAYS` | 到店触发阈值（天） | `7` |
+| `FOLLOWUP_CONSUME_DELAY_DAYS` | 消费触发阈值（天） | `10` |
+| `FOLLOWUP_COOLDOWN_DAYS` | 客户冷却天数 | `7` |
+| `FOLLOWUP_HOURLY_CAP` | 每小时发送上限 | `10` |
+| `FOLLOWUP_DAILY_CAP` | 每日发送上限 | `50` |
+| `FOLLOWUP_QUIET_START_HOUR` / `FOLLOWUP_QUIET_END_HOUR` | 静默时段 | `22 / 8` |
+| `LLM_BASE_URL` | OpenAI兼容接口地址 | 空 |
+| `LLM_API_KEY` | 模型 API Key | 空 |
+| `LLM_MODEL` | 模型名称 | `gpt-4o-mini` |
+
+字段映射可通过以下键覆盖：
+`FEISHU_FIELD_LAST_VISIT`、`FEISHU_FIELD_LAST_CONSUME`、`FEISHU_FIELD_CONSUME_SUMMARY`、
+`FEISHU_FIELD_FOLLOWUP_STATUS`、`FEISHU_FIELD_FOLLOWUP_LAST_SENT_AT`、
+`FEISHU_FIELD_FOLLOWUP_REASON`、`FEISHU_FIELD_FOLLOWUP_SNAPSHOT`、
+`FEISHU_FIELD_FOLLOWUP_MESSAGE`、`FEISHU_FIELD_FOLLOWUP_ATTEMPTS`。
+
+#### 回访 smoke 验证
+
+```bash
+# dry-run + mock llm
+python -m src.tools.followup_smoke --dry-run --limit 2 --mock-llm
+
+# mock 发送失败路径
+python -m src.tools.followup_smoke --limit 2 --mock-llm --mock-wechat-fail
+```
+
 ### 运行参数
 
 可在 Flet 界面中实时调节：

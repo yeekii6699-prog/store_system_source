@@ -39,7 +39,12 @@ def main() -> None:
     """
     cfg = get_config()
     print_table_info("任务表（待办/处理状态表）", cfg["FEISHU_TABLE_URL"])
-    print_table_info("客户表（资料表）", cfg["FEISHU_PROFILE_TABLE_URL"])
+
+    # 只有配置了客户表URL才检查
+    if cfg.get("FEISHU_PROFILE_TABLE_URL"):
+        print_table_info("客户表（资料表）", cfg["FEISHU_PROFILE_TABLE_URL"])
+    else:
+        logger.info("客户表URL未配置，跳过检查")
 
 
 if __name__ == "__main__":

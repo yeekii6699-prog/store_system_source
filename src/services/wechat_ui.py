@@ -162,6 +162,13 @@ class WeChatUIOperations:
         logger.debug("等待窗口超时 [{}]", name or class_name)
         return None
 
+    def _ensure_foreground_for_action(self, action: str) -> bool:
+        """执行RPA动作前确保微信窗口在前台。"""
+        if self._activate_window():
+            return True
+        logger.warning("RPA动作前激活微信失败，跳过本次操作: {}", action)
+        return False
+
     # ====================== 按钮点击 ======================
 
     def _click_button(
@@ -183,6 +190,9 @@ class WeChatUIOperations:
         Returns:
             是否点击成功
         """
+        if not self._ensure_foreground_for_action(f"click_button:{name}"):
+            return False
+
         try:
             kwargs: dict[str, Any] = {"Name": name, "searchDepth": search_depth}
             if class_name:
@@ -212,6 +222,11 @@ class WeChatUIOperations:
         Returns:
             是否点击成功
         """
+        if not self._ensure_foreground_for_action(
+            f"click_button_by_name_contains:{name_contains}"
+        ):
+            return False
+
         main_win = self._get_window(self.WINDOW_NAME)
         if not main_win:
             return False
@@ -266,6 +281,9 @@ class WeChatUIOperations:
         Returns:
             是否点击成功
         """
+        if not self._ensure_foreground_for_action(f"click_list_item:{name}"):
+            return False
+
         item = self._find_list_item(name, search_depth)
         if item and item.Exists(timeout):
             item.Click()
@@ -287,6 +305,9 @@ class WeChatUIOperations:
         Returns:
             是否点击成功
         """
+        if not self._ensure_foreground_for_action("handle_dialog"):
+            return False
+
         for btn_name in button_names:
             if self._click_button(btn_name, timeout=timeout):
                 logger.debug("对话框处理：点击 [{}] 成功", btn_name)
@@ -311,6 +332,9 @@ class WeChatUIOperations:
         Returns:
             是否处理成功
         """
+        if not self._ensure_foreground_for_action("handle_confirm_dialog"):
+            return False
+
         deadline = time.time() + timeout
         while time.time() < deadline:
             for win_name in window_names:
@@ -546,6 +570,9 @@ class WeChatUIOperations:
         Args:
             text: 要发送的文本
         """
+        if not self._ensure_foreground_for_action("send_keys_with_clipboard"):
+            return
+
         if pyperclip:
             pyperclip.copy(text)
             time.sleep(0.1)
@@ -560,6 +587,9 @@ class WeChatUIOperations:
         Args:
             text: 要发送的文本
         """
+        if not self._ensure_foreground_for_action("send_text"):
+            return
+
         if pyperclip:
             pyperclip.copy(text)
             time.sleep(0.1)
@@ -579,6 +609,9 @@ class WeChatUIOperations:
         Returns:
             是否发送成功
         """
+        if not self._ensure_foreground_for_action("send_image"):
+            return False
+
         if self._copy_image_to_clipboard(image_path):
             auto.SendKeys("{Ctrl}v")
             self._random_delay()

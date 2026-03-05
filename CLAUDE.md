@@ -17,7 +17,7 @@
 | 语言 | Python 3.10+ |
 | 数据存储 | 飞书多维表格 API |
 | 自动化 | 微信 UI 自动化 (uiautomation) |
-| GUI | Tkinter |
+| GUI | Flet |
 | 日志 | loguru |
 
 ## 常用命令
@@ -38,6 +38,9 @@ python -m src.utils.table_inspector
 # UI 控件调试（鼠标悬停3秒输出控件信息）
 python ui_probe.py
 
+# 生成激活码
+python -m src.tools.activation_manager generate --count 10 --validity-days 365
+
 # 打包成 exe（需先安装 pyinstaller）
 pyinstaller --onefile --name main_bot --clean src/main.py
 # 或使用 specs 文件
@@ -57,13 +60,19 @@ src/main.py              # 入口：初始化日志 → 系统自检 → 启动 
 ├── src/core/            # 业务核心
 │   ├── system.py        # DPI、自检、环境检测
 │   └── engine.py        # TaskEngine（双线程任务引擎）
-└── src/services/        # 外部服务
-    ├── feishu.py        # 飞书多维表格 API 客户端
-    ├── wechat.py        # 微信 RPA 主类（业务流程编排）
-    ├── wechat_ui.py     # UI 操作基类（窗口、按钮、对话框）
-    ├── wechat_profile.py # 资料卡操作
-    ├── wechat_chat.py   # 聊天消息操作
-    └── wechat_contacts.py # 通讯录操作（新的朋友、验证）
+├── src/services/        # 外部服务
+│   ├── feishu.py        # 飞书多维表格 API 客户端
+│   ├── activation.py    # 激活码验证服务
+│   ├── wechat.py        # 微信 RPA 主类（业务流程编排）
+│   ├── wechat_ui.py     # UI 操作基类（窗口、按钮、对话框）
+│   ├── wechat_profile.py # 资料卡操作
+│   ├── wechat_chat.py   # 聊天消息操作
+│   └── wechat_contacts.py # 通讯录操作（新的朋友、验证）
+├── src/ui/              # 用户界面
+│   ├── flet_app.py      # Flet 主界面
+│   └── flet_error.py    # 错误弹窗
+└── src/tools/           # 开发工具
+    └── activation_manager.py # 激活码生成与管理
 ```
 
 ### 微信 RPA 组合模式设计
@@ -168,6 +177,15 @@ src/main.py              # 入口：初始化日志 → 系统自检 → 启动 
 - VPN 环境下增加超时时间并使用宽松 SSL 配置
 - 支持手动配置代理、禁用 SSL 验证
 
+### Flet 界面模块
+
+`src/ui/flet_app.py` 是主界面，包含：
+- 实时日志查看
+- 系统状态监控
+- 参数动态调节（监控频率、抖动时间、飞书轮询间隔、欢迎包开关）
+- 激活码验证界面
+- 截屏告警功能
+
 ## 配置说明
 
 必需的环境变量配置在 `.env.example` 中，GUI 会引导填写。
@@ -183,6 +201,18 @@ src/main.py              # 入口：初始化日志 → 系统自检 → 启动 
 | `FEISHU_WEBHOOK_URL` | 错误告警推送地址 |
 
 GUI 可实时调节：监控频率、抖动时间、飞书轮询间隔、欢迎包开关。
+
+### 激活码配置
+
+首次启动需要激活码验证：
+
+| 变量 | 说明 |
+|-----|------|
+| `ACTIVATION_TABLE_URL` | 激活码表链接（飞书多维表格） |
+| `ACTIVATION_CODE` | 已激活的激活码 |
+| `ACTIVATION_MACHINE_ID` | 机器码（自动生成） |
+| `ACTIVATION_STATUS` | 激活状态 |
+| `ACTIVATION_EXPIRY` | 到期时间 |
 
 ## 开发规范
 
@@ -218,6 +248,14 @@ chore: 其他修改
 ### 调试工具
 
 运行 `python ui_probe.py` 将鼠标移动到目标位置，3秒后输出控件信息。
+
+### 开发调试脚本
+
+| 脚本 | 用途 |
+|-----|------|
+| `dev_debug/feishu_table_schema.py` | 飞书表结构调试 |
+| `check_activation_table.py` | 检查激活码表结构 |
+| `test_activation.py` | 激活码功能测试 |
 
 ## 常见问题
 

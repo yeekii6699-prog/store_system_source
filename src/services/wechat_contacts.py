@@ -7,7 +7,7 @@ from __future__ import annotations
 
 import re
 import time
-from typing import Optional, List, Any, Literal, TypedDict
+from typing import Optional, List, Any, Literal, TypedDict, Callable
 
 import uiautomation as auto
 from loguru import logger
@@ -34,6 +34,111 @@ class WeChatContactsOperations:
         """
         self._owner = owner
         self._processed_nickname: Optional[str] = None  # 暂存刚发送welcome的昵称
+
+    def _ensure_foreground_for_action(self, action: str) -> bool:
+        """执行RPA动作前确保微信窗口在前台。"""
+        if self._owner._activate_window():
+            return True
+        logger.warning("RPA动作前激活微信失败，跳过本次操作: {}", action)
+        return False
+
+    def _ensure_contacts_tab(self) -> bool:
+        """确保当前位于通讯录视图，避免无意义重复点击。"""
+        contacts_tab = self._owner._find_control(
+            auto.ButtonControl,
+            Name="通讯录",
+            ClassName="mmui::XTabBarItem",
+            searchDepth=8,
+        )
+        if not contacts_tab or not contacts_tab.Exists(0.3):
+            return self._click_contacts_tab()
+
+        selected: Optional[bool] = None
+        try:
+            get_pattern = getattr(contacts_tab, "GetSelectionItemPattern", None)
+            pattern = get_pattern() if get_pattern else None
+            if pattern is not None:
+                selected = bool(getattr(pattern, "IsSelected", False))
+        except Exception:
+            selected = None
+
+        if selected is None:
+            try:
+                raw_selected = getattr(contacts_tab, "IsSelected", None)
+                if isinstance(raw_selected, bool):
+                    selected = raw_selected
+            except Exception:
+                selected = None
+
+        if selected is True:
+            logger.debug("当前已处于'通讯录'页，跳过点击")
+            return True
+
+        if selected is False:
+            logger.debug("当前不在'通讯录'页，执行切换")
+            return self._click_contacts_tab()
+
+        # 无法读取Tab选中状态时，使用通讯录专用列表作为兜底判断
+        list_container = self._owner._find_control(
+            auto.ListControl,
+            AutomationId="primary_table_.contact_list",
+            searchDepth=12,
+        )
+        if list_container and list_container.Exists(0.3):
+            logger.debug("检测到通讯录列表容器，判定已在'通讯录'页")
+            return True
+
+        logger.debug("无法确认是否在'通讯录'页，执行切换")
+        return self._click_contacts_tab()
+
+    def _find_new_friends_entry(self) -> Optional[Any]:
+        """查找“新的朋友”分组入口，未找到通常表示当前无新好友（微信会隐藏该分组）。"""
+        entry = self._owner._find_control(
+            auto.ListItemControl,
+            Name="新的朋友",
+            ClassName="mmui::ContactsCellGroupView",
+            searchDepth=15,
+        )
+        if entry and entry.Exists(0.3):
+            return entry
+
+        entry = self._owner._find_control(
+            auto.ListItemControl,
+            Name="新的朋友",
+            searchDepth=15,
+        )
+        if entry and entry.Exists(0.3):
+            return entry
+
+        return None
+
+    def _is_new_friends_expanded(self, entry: Any) -> Optional[bool]:
+        """读取“新的朋友”分组展开状态；返回 None 表示控件不支持该模式。"""
+        try:
+            get_pattern = getattr(entry, "GetExpandCollapsePattern", None)
+            if not get_pattern:
+                return None
+
+            pattern = get_pattern()
+            if not pattern:
+                return None
+
+            state = getattr(pattern, "ExpandCollapseState", None)
+            if state is None:
+                return None
+
+            if isinstance(state, (int, float)):
+                # UIA常见值: 0=Collapsed, 1=Expanded, 2=PartiallyExpanded
+                return int(state) in (1, 2)
+
+            state_name = str(getattr(state, "name", state)).lower()
+            if "expanded" in state_name:
+                return True
+            if "collapsed" in state_name:
+                return False
+        except Exception:
+            return None
+        return None
 
     # ====================== Tab切换 ======================
 
@@ -65,19 +170,38 @@ class WeChatContactsOperations:
         Returns:
             是否成功点击（False表示没有新的朋友，这是正常情况）
         """
-        # 先检查是否已展开
+        # 先检查是否已展开且有可处理项
         all_items = self._get_new_friends_items(check_only=True)
         if all_items:
             logger.debug("'新的朋友'列表已展开")
             return True
 
-        # 尝试点击展开
-        new_friends = self._owner._find_and_click_list_item(
-            "新的朋友", timeout=1, search_depth=15
-        )
-        if new_friends:
+        entry = self._find_new_friends_entry()
+        if not entry:
+            # 没有入口是正常情况：微信在无新好友时会隐藏该分组
+            logger.debug("未找到'新的朋友'入口（无新好友时会隐藏）")
+            return False
+
+        expanded = self._is_new_friends_expanded(entry)
+        if expanded is True:
+            logger.debug("'新的朋友'分组已展开（当前无待处理项）")
+            return True
+
+        if expanded is None:
+            # 无法读取展开状态时，优先不点击，避免把已展开列表误收起。
+            logger.debug("无法判断'新的朋友'展开状态，跳过点击以避免误收起")
+            return True
+
+        # 明确是收起状态时才点击展开
+        try:
+            if not self._ensure_foreground_for_action("click_new_friends_entry"):
+                return False
+            entry.Click()
+            logger.debug("点击列表项 [新的朋友] 成功")
             self._owner._random_delay(0.5, 1.0)
             return True
+        except Exception as exc:
+            logger.debug("点击列表项 [新的朋友] 失败: {}", exc)
 
         # 备用：遍历查找
         main_win = self._owner._get_window(self._owner.WINDOW_NAME)
@@ -97,6 +221,10 @@ class WeChatContactsOperations:
                                             name == "新的朋友"
                                             and cls == "mmui::ContactsCellGroupView"
                                         ):
+                                            if not self._ensure_foreground_for_action(
+                                                "click_new_friends_entry_fallback"
+                                            ):
+                                                return False
                                             child.Click()
                                             self._owner._random_delay(0.5, 1.0)
                                             return True
@@ -107,8 +235,8 @@ class WeChatContactsOperations:
             except Exception:
                 pass
 
-        # 没有找到"新的朋友"入口 - 这是正常情况，说明没有待处理的好友请求
-        logger.debug("未找到'新的朋友'入口，可能是没有新的好友请求")
+        # 没有点击成功，保持容错返回False
+        logger.debug("未能打开'新的朋友'分组")
         return False
 
     def _get_new_friends_items(self, check_only: bool = False) -> List[NewFriendItem]:
@@ -232,11 +360,43 @@ class WeChatContactsOperations:
         """点击列表项，进入详情页"""
         control = item.get("control")
         if control and control.Exists(1):
+            if not self._ensure_foreground_for_action("open_new_friend_detail"):
+                return False
             control.Click()
             logger.debug("点击列表项成功: {}", item["name"])
             self._owner._random_delay()
             return True
         return False
+
+    def _resolve_profile_nickname(self, fallback: str) -> str:
+        """从资料卡补全昵称，失败则回退到列表昵称。"""
+        try:
+            profile_win = self._owner._profile._wait_profile_window(timeout=3.0)
+        except Exception:
+            profile_win = None
+
+        if not profile_win:
+            return fallback
+
+        try:
+            nickname = self._owner._profile._extract_nickname_from_profile(profile_win)
+        except Exception:
+            nickname = None
+
+        if nickname and nickname.strip():
+            return nickname.strip()
+
+        try:
+            profile_info = self._owner._profile._extract_profile_info(profile_win)
+        except Exception:
+            profile_info = None
+
+        if profile_info:
+            profile_nickname = (profile_info.get("nickname") or "").strip()
+            if profile_nickname:
+                return profile_nickname
+
+        return fallback
 
     def _click_confirm_button(self) -> bool:
         """
@@ -307,29 +467,41 @@ class WeChatContactsOperations:
         Returns:
             是否成功处理弹窗
         """
-        # 等待弹窗出现
+        # 等待弹窗出现并直接点击“确定”，不再切前台，避免打断验证链路
         time.sleep(0.5)
 
-        # 尝试多种方式查找"确定"按钮
-
-        # 方式1: 查找弹窗窗口中的"确定"按钮
+        # 方式1: 直接查找并点击主窗口里的“确定”按钮
         confirm_btn = self._owner._find_control(
             auto.ButtonControl,
             Name="确定",
             ClassName="mmui::XOutlineButton",
             searchDepth=15,
         )
-
-        # 方式2: 查找任何包含"确定"的按钮
-        if not confirm_btn or not confirm_btn.Exists(1):
-            confirm_btn = self._owner._click_button(
-                "确定", timeout=2, search_depth=15, class_name="mmui::XOutlineButton"
-            )
-            if confirm_btn:
-                logger.debug("点击'确定'按钮成功")
+        if confirm_btn and confirm_btn.Exists(0.8):
+            try:
+                confirm_btn.Click()
+                logger.debug("直接点击'确定'按钮成功")
                 self._owner._random_delay(0.5, 1.0)
                 time.sleep(1.0)
                 return True
+            except Exception as exc:
+                logger.debug("直接点击'确定'按钮失败: {}", exc)
+
+        # 方式2: 放宽 ClassName 再尝试一次（仍然直接点击）
+        confirm_btn = self._owner._find_control(
+            auto.ButtonControl,
+            Name="确定",
+            searchDepth=20,
+        )
+        if confirm_btn and confirm_btn.Exists(0.8):
+            try:
+                confirm_btn.Click()
+                logger.debug("放宽匹配后点击'确定'按钮成功")
+                self._owner._random_delay(0.5, 1.0)
+                time.sleep(1.0)
+                return True
+            except Exception as exc:
+                logger.debug("放宽匹配点击'确定'失败: {}", exc)
 
         # 方式3: 查找弹窗 WindowControl
         popup_win = self._owner._find_control(
@@ -382,8 +554,15 @@ class WeChatContactsOperations:
         logger.warning("未找到确认弹窗中的'确定'按钮，可能弹窗已关闭或结构变化")
         return True  # 弹窗可能已经自动关闭，返回True继续流程
 
-    def _extract_wechat_id_from_profile(self) -> Optional[str]:
+    def _extract_wechat_id_from_profile(
+        self,
+        mode: str = "all",
+        exclude_values: Optional[set[str]] = None,
+    ) -> Optional[str]:
         """从资料卡片中提取微信号"""
+        if not self._ensure_foreground_for_action("extract_wechat_id_from_profile"):
+            return None
+
         time.sleep(0.8)  # 减少等待时间
 
         main_win = self._owner._get_window(self._owner.WINDOW_NAME)
@@ -406,6 +585,34 @@ class WeChatContactsOperations:
 
         all_controls = collect_controls(main_win)
 
+        def normalize_wechat_id_text(raw: str) -> str:
+            value = (raw or "").strip()
+            if not value:
+                return ""
+
+            for sep in (":", "："):
+                if sep in value:
+                    left, right = value.split(sep, 1)
+                    left_text = left.strip().lower()
+                    if "微信" in left or "wechat" in left_text:
+                        value = right.strip()
+                        break
+
+            return value
+
+        def normalize_compare_text(value: str) -> str:
+            return (value or "").strip().lower()
+
+        def is_valid_wechat_id(value: str) -> bool:
+            # 微信号常规规则：字母开头，允许字母/数字/下划线/短横线，长度 5-20
+            return bool(re.match(r"^[A-Za-z][A-Za-z0-9_.-]{4,19}$", value))
+
+        exclude_texts = {
+            normalize_compare_text(val)
+            for val in (exclude_values or set())
+            if normalize_compare_text(val)
+        }
+
         # 查找 ContactProfileTextView 控件
         profile_text_views = []
         for ctrl in all_controls:
@@ -414,35 +621,122 @@ class WeChatContactsOperations:
                 if "ContactProfileTextView" in ctrl_class:
                     ctrl_automation_id = getattr(ctrl, "AutomationId", "") or ""
                     ctrl_name = getattr(ctrl, "Name", "") or ""
+                    is_offscreen = bool(getattr(ctrl, "IsOffscreen", False))
+                    top = -1
+                    try:
+                        rect = getattr(ctrl, "BoundingRectangle", None)
+                        top = int(getattr(rect, "top", -1))
+                    except Exception:
+                        top = -1
                     profile_text_views.append(
                         {
-                            "name": ctrl_name,
+                            "name": normalize_wechat_id_text(ctrl_name),
+                            "raw_name": ctrl_name,
                             "automation_id": ctrl_automation_id,
+                            "is_offscreen": is_offscreen,
+                            "top": top,
                         }
                     )
             except Exception:
                 continue
 
-        # 筛选微信号
-        for item in profile_text_views:
-            ctrl_name = item["name"]
-            ctrl_automation_id = item["automation_id"]
+        def pick_by_automation_id(predicate: Any, reason: str) -> Optional[str]:
+            matches: List[dict[str, Any]] = []
+            for item in profile_text_views:
+                ctrl_name = str(item.get("name") or "").strip()
+                ctrl_automation_id = str(item.get("automation_id") or "").strip()
+                if bool(item.get("is_offscreen", False)):
+                    continue
+                if not predicate(ctrl_automation_id):
+                    continue
+                if not is_valid_wechat_id(ctrl_name):
+                    continue
+                if exclude_texts and normalize_compare_text(ctrl_name) in exclude_texts:
+                    continue
+                matches.append(item)
 
-            if "basic_line_view" in ctrl_automation_id and ctrl_automation_id.endswith(
-                "ContactProfileTextView"
-            ):
-                if re.match(r"^[A-Za-z0-9_.-]{4,20}$", ctrl_name):
-                    logger.debug(
-                        "提取到微信号: {} (AutomationId={})",
-                        ctrl_name,
-                        ctrl_automation_id,
-                    )
-                    return ctrl_name
+            if not matches:
+                return None
+
+            with_digits = [
+                item
+                for item in matches
+                if any(ch.isdigit() for ch in str(item.get("name") or ""))
+            ]
+            ranked = with_digits if with_digits else matches
+
+            ranked.sort(
+                key=lambda it: (
+                    int(it.get("top", -1)),
+                    len(str(it.get("name") or "")),
+                ),
+                reverse=True,
+            )
+
+            best = ranked[0]
+            ctrl_name = str(best.get("name") or "").strip()
+            ctrl_automation_id = str(best.get("automation_id") or "").strip()
+            logger.debug(
+                "提取到微信号: {} (AutomationId={}, top={}, 命中={}, 候选数={})",
+                ctrl_name,
+                ctrl_automation_id,
+                best.get("top", -1),
+                reason,
+                len(matches),
+            )
+            return ctrl_name
+
+        exact_automation_id = (
+            "right_v_view.user_info_center_view.basic_line_view.ContactProfileTextView"
+        )
+
+        # 1) 精确命中：用户提供的正确控件路径
+        candidate = pick_by_automation_id(
+            lambda aid: aid == exact_automation_id,
+            "exact_basic_line_view",
+        )
+        if candidate:
+            return candidate
+
+        # 2) 次优：同路径前缀（不同窗口层级可能追加前缀）
+        candidate = pick_by_automation_id(
+            lambda aid: aid.endswith(exact_automation_id),
+            "suffix_basic_line_view",
+        )
+        if candidate:
+            return candidate
+
+        if mode == "exact":
+            logger.debug("微信号精确路径尚未就绪，继续等待资料面板刷新")
+            return None
+
+        # 3) 回退：user_info_center_view 下的 basic_line_view
+        candidate = pick_by_automation_id(
+            lambda aid: "user_info_center_view.basic_line_view" in aid
+            and aid.endswith("ContactProfileTextView"),
+            "user_info_center_basic_line_view",
+        )
+        if candidate:
+            return candidate
+
+        # 4) 最后回退：历史规则（basic_line_view）
+        candidate = pick_by_automation_id(
+            lambda aid: "basic_line_view" in aid
+            and aid.endswith("ContactProfileTextView"),
+            "legacy_basic_line_view",
+        )
+        if candidate:
+            return candidate
 
         logger.debug("未找到有效的微信号")
         return None
 
-    def _get_wechat_id_with_wait(self, timeout: float = 15.0) -> Optional[str]:
+    def _get_wechat_id_with_wait(
+        self,
+        timeout: float = 15.0,
+        abort_check: Callable[[], bool] | None = None,
+        exclude_values: Optional[set[str]] = None,
+    ) -> Optional[str]:
         """
         等待并获取微信号，带超时控制。
 
@@ -452,9 +746,34 @@ class WeChatContactsOperations:
         Returns:
             微信号字符串，超时返回None
         """
-        start_time = time.time()
-        while time.time() - start_time < timeout:
-            wechat_id = self._extract_wechat_id_from_profile()
+        overall_deadline = time.time() + max(timeout, 0.0)
+
+        # 阶段1：先严格等待“前往验证确认后”才会出现的精确控件
+        exact_wait_deadline = min(overall_deadline, time.time() + min(timeout, 6.0))
+        while time.time() < exact_wait_deadline:
+            if abort_check and abort_check():
+                return None
+
+            wechat_id = self._extract_wechat_id_from_profile(
+                mode="exact",
+                exclude_values=exclude_values,
+            )
+            if wechat_id:
+                logger.debug("成功提取微信号(精确路径): {}", wechat_id)
+                return wechat_id
+
+            time.sleep(0.4)
+
+        logger.debug("精确路径提取超时，开始回退提取微信号")
+
+        # 阶段2：兜底回退（兼容控件层级差异）
+        while time.time() < overall_deadline:
+            if abort_check and abort_check():
+                return None
+            wechat_id = self._extract_wechat_id_from_profile(
+                mode="all",
+                exclude_values=exclude_values,
+            )
             if wechat_id:
                 logger.debug("成功提取微信号: {}", wechat_id)
                 return wechat_id
@@ -462,6 +781,73 @@ class WeChatContactsOperations:
 
         logger.warning("等待 {} 秒未能提取到微信号", timeout)
         return None
+
+    def _get_identity_before_send(
+        self,
+        fallback_nickname: str,
+        timeout: float = 15.0,
+        abort_check: Callable[[], bool] | None = None,
+    ) -> Optional[tuple[str, str]]:
+        """点击发消息前，确保拿到有效昵称和微信号。"""
+
+        def _wait_send_button_ready(wait_timeout: float) -> bool:
+            end_time = time.time() + max(wait_timeout, 0.0)
+            while time.time() < end_time:
+                if abort_check and abort_check():
+                    return False
+
+                send_btn = self._owner._find_control(
+                    auto.ButtonControl,
+                    AutomationId="fixed_height_v_view.content_v_view.ContactProfileBottomUi.foot_button_view.chat_img_button",
+                    searchDepth=20,
+                )
+                if send_btn and send_btn.Exists(0.2):
+                    return True
+                time.sleep(0.2)
+            return False
+
+        start_time = time.time()
+        nickname = self._resolve_profile_nickname(fallback_nickname).strip()
+        if not nickname:
+            nickname = (fallback_nickname or "").strip()
+
+        exclude_values: set[str] = set()
+        if fallback_nickname:
+            exclude_values.add(fallback_nickname)
+        if nickname:
+            exclude_values.add(nickname)
+
+        wechat_id = self._get_wechat_id_with_wait(
+            timeout=timeout,
+            abort_check=abort_check,
+            exclude_values=exclude_values,
+        )
+        if abort_check and abort_check():
+            return None
+
+        nickname_after_wait = self._resolve_profile_nickname(
+            nickname or fallback_nickname
+        ).strip()
+        if nickname_after_wait:
+            nickname = nickname_after_wait
+
+        elapsed = time.time() - start_time
+        remain = max(0.0, timeout - elapsed)
+        if not _wait_send_button_ready(remain):
+            logger.warning("发消息前未等到'发消息'按钮就绪")
+            return None
+
+        if not nickname or not wechat_id:
+            logger.warning(
+                "发消息前身份信息不完整: nickname={}, wechat_id={}",
+                nickname or "<empty>",
+                wechat_id or "<empty>",
+            )
+            return None
+
+        logger.debug("发消息前校验通过: nickname={}, wechat_id={}", nickname, wechat_id)
+
+        return nickname, wechat_id
 
     # ====================== 处理入口 ======================
 
@@ -481,6 +867,8 @@ class WeChatContactsOperations:
             searchDepth=20,
         )
         if send_btn and send_btn.Exists(1):
+            if not self._ensure_foreground_for_action("click_send_message_button"):
+                return False
             send_btn.Click()
             logger.debug("点击'发消息'按钮成功")
             self._owner._random_delay()
@@ -494,6 +882,10 @@ class WeChatContactsOperations:
             searchDepth=20,
         )
         if send_btn and send_btn.Exists(1):
+            if not self._ensure_foreground_for_action(
+                "click_send_message_button_fallback"
+            ):
+                return False
             send_btn.Click()
             logger.debug("点击'发消息'按钮成功")
             self._owner._random_delay()
@@ -533,6 +925,8 @@ class WeChatContactsOperations:
 
         # 1. 右键点击列表项
         try:
+            if not self._ensure_foreground_for_action("right_click_new_friend_item"):
+                return False
             control.RightClick()
             logger.debug("右键点击列表项: {}", item["name"])
             self._owner._random_delay(0.3, 0.5)
@@ -561,6 +955,8 @@ class WeChatContactsOperations:
 
         if delete_menu and delete_menu.Exists(0.5):
             try:
+                if not self._ensure_foreground_for_action("click_delete_menu"):
+                    return False
                 delete_menu.Click()
                 logger.info("点击'删除'菜单项成功: {}", item["name"])
                 self._owner._random_delay(0.5, 1.0)
@@ -634,9 +1030,9 @@ class WeChatContactsOperations:
             logger.warning("更新飞书状态失败: {} - {}", nickname, e)
         # ===========================================
 
-        # 返回"新的朋友"列表
+        # 返回"新的朋友"列表（保持在通讯录视图）
         self._owner._activate_window()
-        self._click_contacts_tab()
+        self._ensure_contacts_tab()
         self._click_new_friends_entry()
         self._owner._random_delay(0.5, 1.0)
 
@@ -658,6 +1054,7 @@ class WeChatContactsOperations:
         feishu,
         welcome_enabled: bool,
         welcome_steps: List[dict[str, str | None]],
+        abort_check: Callable[[], bool] | None = None,
     ) -> bool:
         """
         处理'已添加'的好友（我主动添加后对方通过）。
@@ -690,31 +1087,45 @@ class WeChatContactsOperations:
             nickname = raw_nickname
         logger.info("[已添加] 处理好友: {} (原始: {})", nickname, raw_nickname)
 
+        if abort_check and abort_check():
+            return False
+
         # 1. 点击列表项打开右侧资料面板
         if not self._open_new_friend_detail(item):
             logger.warning("[已添加] 无法进入详情页: {}", nickname)
             return False
 
+        identity = self._get_identity_before_send(
+            fallback_nickname=nickname,
+            timeout=15.0,
+            abort_check=abort_check,
+        )
+        if not identity:
+            logger.warning(
+                "[已添加] 未获取到有效昵称或微信号，跳过发消息: {}", nickname
+            )
+            return False
+
+        nickname, wechat_id = identity
+
         # ========== 2-3. 获取微信号并写入飞书（点击发消息之前） ==========
-        wechat_id = self._get_wechat_id_with_wait(timeout=15.0)
-        if wechat_id:
-            try:
-                # 写入飞书：微信号字段=微信号，状态=已绑定
-                feishu.upsert_contact_profile(
-                    wechat_id=wechat_id, nickname=nickname, status="已绑定"
-                )
-                logger.info(
-                    "[已添加] 飞书写入成功: 微信号={}, 昵称={}, 状态=已绑定",
-                    wechat_id,
-                    nickname,
-                )
-            except Exception as e:
-                logger.warning("[已添加] 飞书写入失败: {} - {}", nickname, e)
-        else:
-            logger.warning("[已添加] 未能获取到微信号，跳过飞书写入: {}", nickname)
+        try:
+            # 写入飞书：微信号字段=微信号，状态=已绑定
+            feishu.upsert_contact_profile(
+                wechat_id=wechat_id, nickname=nickname, status="已绑定"
+            )
+            logger.info(
+                "[已添加] 飞书写入成功: 微信号={}, 昵称={}, 状态=已绑定",
+                wechat_id,
+                nickname,
+            )
+        except Exception as e:
+            logger.warning("[已添加] 飞书写入失败: {} - {}", nickname, e)
         # =================================================================
 
         # 4. 点击"发消息"按钮进入聊天
+        if abort_check and abort_check():
+            return False
         if not self._click_send_message_button():
             logger.warning("[已添加] 点击'发消息'按钮失败: {}", nickname)
             return False
@@ -727,10 +1138,9 @@ class WeChatContactsOperations:
             self._processed_nickname = nickname  # 暂存昵称用于删除
 
         # 6. 通过昵称删除（会返回"新的朋友"列表再删除）
+        if abort_check and abort_check():
+            return False
         self._delete_by_stored_nickname(feishu)
-
-        # 7. 返回聊天列表
-        self._return_to_chat_list()
 
         return True
 
@@ -740,6 +1150,7 @@ class WeChatContactsOperations:
         feishu,
         welcome_enabled: bool,
         welcome_steps: List[dict[str, str | None]],
+        abort_check: Callable[[], bool] | None = None,
     ) -> bool:
         """
         处理'等待验证'的项（对方加我，需要我前往验证）。
@@ -774,6 +1185,9 @@ class WeChatContactsOperations:
             nickname = raw_nickname
         logger.info("[待验证] 处理好友: {} (原始: {})", nickname, raw_nickname)
 
+        if abort_check and abort_check():
+            return False
+
         # 1. 点击列表项打开详情页
         if not self._open_new_friend_detail(item):
             logger.warning("[待验证] 无法进入详情页: {}", nickname)
@@ -789,26 +1203,37 @@ class WeChatContactsOperations:
             logger.warning("[待验证] 处理确认弹窗失败: {}", nickname)
             # 继续尝试，可能弹窗已自动关闭
 
+        identity = self._get_identity_before_send(
+            fallback_nickname=nickname,
+            timeout=15.0,
+            abort_check=abort_check,
+        )
+        if not identity:
+            logger.warning(
+                "[待验证] 未获取到有效昵称或微信号，跳过发消息: {}", nickname
+            )
+            return False
+
+        nickname, wechat_id = identity
+
         # ========== 4-5. 获取微信号并写入飞书（点击发消息之前） ==========
-        wechat_id = self._get_wechat_id_with_wait(timeout=15.0)
-        if wechat_id:
-            try:
-                # 写入飞书：微信号字段=微信号，状态=已绑定
-                feishu.upsert_contact_profile(
-                    wechat_id=wechat_id, nickname=nickname, status="已绑定"
-                )
-                logger.info(
-                    "[待验证] 飞书写入成功: 微信号={}, 昵称={}, 状态=已绑定",
-                    wechat_id,
-                    nickname,
-                )
-            except Exception as e:
-                logger.warning("[待验证] 飞书写入失败: {} - {}", nickname, e)
-        else:
-            logger.warning("[待验证] 未能获取到微信号，跳过飞书写入: {}", nickname)
+        try:
+            # 写入飞书：微信号字段=微信号，状态=已绑定
+            feishu.upsert_contact_profile(
+                wechat_id=wechat_id, nickname=nickname, status="已绑定"
+            )
+            logger.info(
+                "[待验证] 飞书写入成功: 微信号={}, 昵称={}, 状态=已绑定",
+                wechat_id,
+                nickname,
+            )
+        except Exception as e:
+            logger.warning("[待验证] 飞书写入失败: {} - {}", nickname, e)
         # =================================================================
 
         # 6. 点击"发消息"按钮进入聊天
+        if abort_check and abort_check():
+            return False
         if not self._click_send_message_button():
             logger.warning("[待验证] 点击'发消息'按钮失败: {}", nickname)
             return False
@@ -821,10 +1246,9 @@ class WeChatContactsOperations:
             self._processed_nickname = nickname  # 暂存昵称用于删除
 
         # 8. 通过昵称删除（会返回"新的朋友"列表再删除）
+        if abort_check and abort_check():
+            return False
         self._delete_by_stored_nickname(feishu)
-
-        # 9. 返回聊天列表
-        self._return_to_chat_list()
 
         return True
 
@@ -835,6 +1259,7 @@ class WeChatContactsOperations:
         feishu,
         welcome_enabled: bool,
         welcome_steps: List[Any],
+        abort_check: Callable[[], bool] | None = None,
     ) -> int:
         """
         通过通讯录-新的朋友扫描并处理新好友。
@@ -856,14 +1281,21 @@ class WeChatContactsOperations:
         Returns:
             处理成功的好友数量
         """
+        if abort_check and abort_check():
+            return 0
+
         if not self._owner._activate_window():
             return 0
 
-        # 点击通讯录
-        if not self._click_contacts_tab():
+        # 先检查是否已处于“通讯录”页，不在则点击切换
+        if abort_check and abort_check():
+            return 0
+        if not self._ensure_contacts_tab():
             return 0
 
         # 点击新的朋友
+        if abort_check and abort_check():
+            return 0
         if not self._click_new_friends_entry():
             return 0
 
@@ -871,7 +1303,6 @@ class WeChatContactsOperations:
         all_items = self._get_new_friends_items()
         if not all_items:
             logger.debug("新的朋友列表为空")
-            self._return_to_chat_list()
             return 0
 
         # 分离两类好友
@@ -888,53 +1319,57 @@ class WeChatContactsOperations:
 
         # ====================== 第一阶段：处理'已添加'的好友 ======================
         for idx, item in enumerate(verified_friends, 1):
+            if abort_check and abort_check():
+                return processed_count
             try:
                 logger.info(
                     "[阶段1/2] [{}/{}] 处理已添加好友", idx, len(verified_friends)
                 )
                 if self._process_verified_friend(
-                    item, feishu, welcome_enabled, welcome_steps
+                    item,
+                    feishu,
+                    welcome_enabled,
+                    welcome_steps,
+                    abort_check=abort_check,
                 ):
                     processed_count += 1
             except Exception as e:
                 logger.error("[已添加] 处理异常: {} - {}", item["name"], e)
             finally:
-                # 返回并继续下一个
-                try:
-                    self._return_to_chat_list()
-                except Exception:
-                    pass
+                # 继续下一个前，确保仍在通讯录/新的朋友视图
                 if idx < len(verified_friends):
                     self._owner._activate_window()
-                    self._click_contacts_tab()
+                    self._ensure_contacts_tab()
                     self._click_new_friends_entry()
+
+            if abort_check and abort_check():
+                return processed_count
 
         # ====================== 第二阶段：处理'等待验证'的好友 ======================
         for idx, item in enumerate(pending_items, 1):
+            if abort_check and abort_check():
+                return processed_count
             try:
                 logger.info("[阶段2/2] [{}/{}] 处理待验证好友", idx, len(pending_items))
                 if self._process_pending_verification(
-                    item, feishu, welcome_enabled, welcome_steps
+                    item,
+                    feishu,
+                    welcome_enabled,
+                    welcome_steps,
+                    abort_check=abort_check,
                 ):
                     processed_count += 1
             except Exception as e:
                 logger.error("[待验证] 处理异常: {} - {}", item["name"], e)
             finally:
-                # 返回并继续下一个
-                try:
-                    self._return_to_chat_list()
-                except Exception:
-                    pass
+                # 继续下一个前，确保仍在通讯录/新的朋友视图
                 if idx < len(pending_items):
                     self._owner._activate_window()
-                    self._click_contacts_tab()
+                    self._ensure_contacts_tab()
                     self._click_new_friends_entry()
 
-        # 返回聊天列表
-        try:
-            self._return_to_chat_list()
-        except Exception:
-            pass
+            if abort_check and abort_check():
+                return processed_count
 
         logger.info("扫描完成，共处理 {} 个新好友", processed_count)
         return processed_count

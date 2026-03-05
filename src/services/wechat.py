@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import time
 from typing import (
+    Callable,
     Optional,
     Sequence,
     Literal,
@@ -356,15 +357,67 @@ class WeChatRPA:
             if not profile_win:
                 return False
 
+            profile_class = str(getattr(profile_win, "ClassName", "") or "")
+            entered_chat_directly = profile_class == "mmui::MainWindow"
+
             try:
-                if not self._click_button(
-                    "发消息", timeout=self.button_timeout, search_depth=10
-                ):
-                    logger.debug("未找到'发消息'按钮")
+                msg_button_labels = ("发消息", "发送消息", "Message")
+
+                def _click_message_button_in_profile() -> bool:
+                    for label in msg_button_labels:
+                        try:
+                            btn = profile_win.ButtonControl(Name=label, searchDepth=20)
+                            if btn.Exists(0.3):
+                                if not self._activate_window():
+                                    return False
+                                btn.Click()
+                                logger.debug("在资料卡内点击按钮成功: {}", label)
+                                return True
+                        except Exception:
+                            continue
+
+                    try:
+                        profile_win_any = cast(Any, profile_win)
+                        for ctrl in profile_win_any.GetDescendants():
+                            try:
+                                ctrl_type = str(
+                                    getattr(ctrl, "ControlTypeName", "") or ""
+                                )
+                                if ctrl_type != "ButtonControl":
+                                    continue
+                                ctrl_name = str(getattr(ctrl, "Name", "") or "")
+                                if not any(
+                                    label in ctrl_name for label in msg_button_labels
+                                ):
+                                    continue
+                                if not self._activate_window():
+                                    return False
+                                ctrl.Click()
+                                logger.debug(
+                                    "在资料卡内通过遍历点击按钮成功: {}", ctrl_name
+                                )
+                                return True
+                            except Exception:
+                                continue
+                    except Exception:
+                        pass
+
+                    for label in msg_button_labels:
+                        if self._click_button(
+                            label, timeout=self.button_timeout, search_depth=12
+                        ):
+                            logger.debug("通过全局兜底点击按钮成功: {}", label)
+                            return True
                     return False
+
+                if not entered_chat_directly and not _click_message_button_in_profile():
+                    logger.debug("未找到资料卡中的'发消息/发送消息'按钮")
+                    return False
+                if entered_chat_directly:
+                    logger.debug("搜索后已直接进入聊天窗口，跳过'发消息'按钮点击")
                 time.sleep(0.8)
             finally:
-                if profile_win.Exists(0):
+                if not entered_chat_directly and profile_win.Exists(0):
                     profile_win.SendKeys("{Esc}")
 
         if not self._activate_window():
@@ -374,6 +427,7 @@ class WeChatRPA:
         logger.info("开始向 [{}] 发送欢迎包...", keyword)
 
         def _send_steps() -> bool:
+            sent_any = False
             for i, step in enumerate(steps):
                 try:
                     msg_type = step.get("type")
@@ -384,19 +438,26 @@ class WeChatRPA:
 
                     if msg_type == "text":
                         self._send_text(content)
+                        sent_any = True
                     elif msg_type == "link":
                         title = step.get("title", "")
                         text = f"{title}\n{content}" if title else content
                         self._send_text(text)
+                        sent_any = True
                     elif msg_type == "image":
                         if not self._send_image(content):
                             logger.error("图片复制失败: {}", content)
-                            return False
+                            if sent_any:
+                                logger.warning("欢迎包部分发送成功，跳过剩余步骤")
+                            return sent_any
+                        sent_any = True
                     if i < len(steps) - 1:
                         time.sleep(self.welcome_step_delay)
                 except Exception as e:
                     logger.error("发送步骤 {} 失败: {}", i + 1, e)
-                    return False
+                    if sent_any:
+                        logger.warning("欢迎包部分发送成功，跳过剩余步骤")
+                    return sent_any
             return True
 
         attempts = max(0, self.welcome_retry_count) + 1
@@ -413,10 +474,15 @@ class WeChatRPA:
         feishu,
         welcome_enabled: bool,
         welcome_steps: List[Any],
+        abort_check: Callable[[], bool] | None = None,
     ) -> int:
         """通过通讯录-新的好友扫描并处理新好友"""
-        handler = getattr(self._contacts, "scan_new_friends_via_contacts")
-        return handler(feishu, welcome_enabled, welcome_steps)
+        return self._contacts.scan_new_friends_via_contacts(
+            feishu,
+            welcome_enabled,
+            welcome_steps,
+            abort_check=abort_check,
+        )
 
     def scan_passive_new_friends(
         self, keywords: Optional[Sequence[str]] = None, max_chats: Optional[int] = None
@@ -459,6 +525,9 @@ class WeChatRPA:
         for idx, item in enumerate(cached_items, start=1):
             try:
                 item_name = item.Name or "(无名称)"
+                if not self._activate_window():
+                    logger.debug("切换会话前激活微信窗口失败")
+                    continue
                 item.Click()
                 time.sleep(0.8)
             except Exception as exc:
@@ -587,6 +656,9 @@ class WeChatRPA:
         network_find = main.ListItemControl(SubName="网络查找", searchDepth=15)
         if network_find.Exists(0.5):
             logger.debug("点击网络查找选项")
+            if not self._activate_window():
+                logger.debug("点击网络查找前激活窗口失败")
+                return None
             network_find.Click()
             clicked = True
         else:
@@ -595,6 +667,9 @@ class WeChatRPA:
             )
             if network_find_v2.Exists(0.5):
                 logger.debug("点击网络查找选项(v2)")
+                if not self._activate_window():
+                    logger.debug("点击网络查找(v2)前激活窗口失败")
+                    return None
                 network_find_v2.Click()
                 clicked = True
 
@@ -606,6 +681,9 @@ class WeChatRPA:
                 )
                 if target.Exists(0):
                     logger.debug("点击精确匹配的搜索结果: {}", keyword)
+                    if not self._activate_window():
+                        logger.debug("点击精确匹配搜索结果前激活窗口失败")
+                        return None
                     target.Click()
                     clicked = True
                 else:
@@ -613,13 +691,33 @@ class WeChatRPA:
                         try:
                             item_name = item.Name or ""
                             item_aid = getattr(item, "AutomationId", "") or ""
-                            if item_name in ("最常使用", "最近聊天", "群聊"):
+                            item_cls = getattr(item, "ClassName", "") or ""
+
+                            # 跳过搜索分组标题/分隔项，避免误点到“联系人/搜索网络结果”等非结果行
+                            if item_name in (
+                                "最常使用",
+                                "最近聊天",
+                                "群聊",
+                                "联系人",
+                                "搜索网络结果",
+                            ):
                                 continue
-                            if item_aid and not item_aid.startswith("search_item_"):
+
+                            # 真实结果优先命中 search_item_，兼容部分版本仅暴露 SearchContentCellView
+                            is_result_by_aid = item_aid.startswith("search_item_")
+                            is_result_by_class = "SearchContentCellView" in item_cls
+                            if not (is_result_by_aid or is_result_by_class):
                                 continue
+
                             logger.debug(
-                                "点击搜索结果项: name={}, aid={}", item_name, item_aid
+                                "点击搜索结果项: name={}, aid={}, class={}",
+                                item_name,
+                                item_aid,
+                                item_cls,
                             )
+                            if not self._activate_window():
+                                logger.debug("点击搜索结果项前激活窗口失败")
+                                return None
                             item.Click()
                             clicked = True
                             break
@@ -630,19 +728,9 @@ class WeChatRPA:
         if not clicked:
             _send_keys("{Enter}")
 
-        # 等待资料卡窗口
-        profile_win = None
+        # 等待资料卡窗口（兼容手机号搜索触发的弹窗式资料卡）
         profile_timeout = max(self.profile_timeout, 1.0)
-        end_time = time.time() + profile_timeout
-        while time.time() < end_time:
-            for title in self.PROFILE_TITLES:
-                win = self._get_window(title)
-                if win.Exists(0):
-                    profile_win = win
-                    break
-            if profile_win:
-                break
-            time.sleep(0.3)
+        profile_win = self._profile._wait_profile_window(timeout=profile_timeout)
 
         if profile_win:
             try:
@@ -660,7 +748,15 @@ class WeChatRPA:
             add_exists = main.ButtonControl(Name="添加到通讯录", searchDepth=15).Exists(
                 0
             )
+            in_chat = main.EditControl(searchDepth=15).Exists(0)
             if msg_exists or add_exists:
+                try:
+                    main.SetFocus()
+                except Exception:
+                    pass
+                return main
+            if in_chat:
+                logger.debug("搜索后已进入聊天窗口，直接返回主窗口")
                 try:
                     main.SetFocus()
                 except Exception:

@@ -9,7 +9,7 @@ import queue
 import sys
 from datetime import datetime
 from pathlib import Path
-from typing import Callable, cast
+from typing import Any, Callable, cast
 
 import flet as ft
 from loguru import logger
@@ -25,6 +25,13 @@ from src.config.settings import (
 from src.core.engine import TaskEngine
 from src.core.system import check_environment, run_self_check
 from src.services.feishu import FeishuClient
+from src.services.activation import (
+    activate_code,
+    check_local_activation_status,
+    clear_activation,
+    need_activation,
+    validate_activation_code,
+)
 
 
 class FletApp:
@@ -73,6 +80,7 @@ class FletApp:
         self.feishu_table_url_input: ft.TextField | None = None
         self.feishu_profile_table_url_input: ft.TextField | None = None
         self.wechat_exec_path_input: ft.TextField | None = None
+        self.activation_code_input: ft.TextField | None = None
         self.network_proxy_input: ft.TextField | None = None
         self.use_system_proxy_switch: ft.Switch | None = None
         self.verify_ssl_switch: ft.Switch | None = None
@@ -89,9 +97,37 @@ class FletApp:
         self.welcome_step_delay_input: ft.TextField | None = None
         self.welcome_retry_count_input: ft.TextField | None = None
         self.feishu_rate_limit_input: ft.TextField | None = None
+        self.followup_enabled_switch: ft.Switch | None = None
+        self.followup_dry_run_switch: ft.Switch | None = None
+        self.followup_poll_interval_input: ft.TextField | None = None
+        self.followup_batch_limit_input: ft.TextField | None = None
+        self.followup_visit_delay_input: ft.TextField | None = None
+        self.followup_consume_delay_input: ft.TextField | None = None
+        self.followup_cooldown_input: ft.TextField | None = None
+        self.followup_daily_cap_input: ft.TextField | None = None
+        self.followup_hourly_cap_input: ft.TextField | None = None
+        self.followup_quiet_start_input: ft.TextField | None = None
+        self.followup_quiet_end_input: ft.TextField | None = None
+        self.followup_prompt_version_input: ft.TextField | None = None
+        self.llm_base_url_input: ft.TextField | None = None
+        self.llm_api_key_input: ft.TextField | None = None
+        self.llm_model_input: ft.TextField | None = None
+        self.llm_timeout_input: ft.TextField | None = None
+        self.llm_max_tokens_input: ft.TextField | None = None
+        self.llm_retry_count_input: ft.TextField | None = None
         self.config_status_text: ft.Text | None = None
         self.welcome_steps_data: list[dict[str, str]] = []
         self.welcome_steps_view: ft.Column | None = None
+        self.followup_request_list_view: ft.Column | None = None
+        self.followup_pending_list_view: ft.Column | None = None
+        self.followup_completed_list_view: ft.Column | None = None
+        self.followup_pending_count_text: ft.Text | None = None
+        self.followup_completed_count_text: ft.Text | None = None
+        self.followup_selected_count_text: ft.Text | None = None
+        self.followup_pending_records_by_id: dict[str, dict[str, Any]] = {}
+        self.followup_completed_records_cache: list[dict[str, Any]] = []
+        self.followup_selected_record_ids: set[str] = set()
+        self.followup_request_signature: str = ""
 
     def _queue_sink(self, message) -> None:
         try:
@@ -138,13 +174,14 @@ class FletApp:
         self.nav_rail = self._build_nav_rail()
         main_row.controls.append(self.nav_rail)
 
-        self.content_area = ft.Column(
+        content_area = ft.Column(
             expand=True,
             horizontal_alignment=ft.CrossAxisAlignment.START,
             spacing=0,
         )
-        self.content_area.controls.append(self._build_dashboard())
-        main_row.controls.append(self.content_area)
+        content_area.controls.append(self._build_dashboard())
+        self.content_area = content_area
+        main_row.controls.append(content_area)
 
         page.add(main_row)
 
@@ -186,6 +223,11 @@ class FletApp:
                     icon=ft.Icon(ft.Icons.TUNE_OUTLINED),
                     selected_icon=ft.Icon(ft.Icons.TUNE),
                     label="运营",
+                ),
+                ft.NavigationRailDestination(
+                    icon=ft.Icon(ft.Icons.FORUM_OUTLINED),
+                    selected_icon=ft.Icon(ft.Icons.FORUM),
+                    label="回访",
                 ),
                 ft.NavigationRailDestination(
                     icon=ft.Icon(ft.Icons.LIST_ALT_OUTLINED),
@@ -233,6 +275,9 @@ class FletApp:
             bgcolor=ft.Colors.BLUE_50,
         )
         content.controls.append(welcome_banner)
+
+        activation_card = self._build_activation_card()
+        content.controls.append(activation_card)
 
         status_card = self._build_status_card()
         content.controls.append(status_card)
@@ -361,18 +406,186 @@ class FletApp:
             expand=True,
         )
 
+    def _build_activation_card(self) -> ft.Container:
+        status = check_local_activation_status()
+
+        if need_activation():
+            if not self.activation_code_input:
+                self.activation_code_input = ft.TextField(
+                    label="激活码",
+                    password=True,
+                    hint_text="格式: XXXX-XXXX-XXXX-XXXX",
+                    width=360,
+                )
+
+            inactive_header = [
+                ft.Icon(
+                    ft.Icons.LOCK,
+                    size=28,
+                    color=ft.Colors.AMBER_600,
+                ),
+                ft.Text(
+                    "激活验证",
+                    size=18,
+                    weight=ft.FontWeight.BOLD,
+                    color=self.TEXT_PRIMARY,
+                ),
+            ]
+            inactive_actions = [
+                ft.ElevatedButton(
+                    "激活系统",
+                    icon=ft.Icons.CHECK,
+                    on_click=self._on_activate_click,
+                ),
+                ft.Text(
+                    status.get("message", ""),
+                    size=12,
+                    color=ft.Colors.RED_500,
+                ),
+            ]
+            inactive_controls = [
+                ft.Row(cast(list[ft.Control], inactive_header), spacing=12),
+                ft.Text(
+                    "请输入激活码以继续使用系统",
+                    size=12,
+                    color=self.TEXT_SECONDARY,
+                ),
+                self.activation_code_input,
+                ft.Row(
+                    cast(list[ft.Control], inactive_actions),
+                    spacing=12,
+                    alignment=ft.MainAxisAlignment.START,
+                ),
+            ]
+
+            return ft.Container(
+                content=ft.Column(
+                    cast(list[ft.Control], inactive_controls),
+                    spacing=12,
+                    horizontal_alignment=ft.CrossAxisAlignment.START,
+                ),
+                padding=20,
+                border_radius=16,
+                bgcolor=ft.Colors.AMBER_50,
+            )
+
+        remaining_days = status.get("remaining_days")
+        remaining_label = f"{remaining_days}天" if remaining_days is not None else "-"
+        expires_at = status.get("expires_at", "未知")
+
+        active_header = [
+            ft.Icon(
+                ft.Icons.CHECK_CIRCLE,
+                size=28,
+                color=self.SUCCESS_COLOR,
+            ),
+            ft.Text(
+                "已激活",
+                size=18,
+                weight=ft.FontWeight.BOLD,
+                color=self.TEXT_PRIMARY,
+            ),
+            ft.Text(
+                status.get("message", ""),
+                size=12,
+                color=self.TEXT_SECONDARY,
+            ),
+        ]
+        active_stats = [
+            ft.Column(
+                [
+                    ft.Text("剩余天数", size=12, color=self.TEXT_SECONDARY),
+                    ft.Text(
+                        remaining_label,
+                        size=18,
+                        weight=ft.FontWeight.BOLD,
+                        color=self.SUCCESS_COLOR,
+                    ),
+                ],
+                spacing=4,
+            ),
+            ft.Column(
+                [
+                    ft.Text("到期时间", size=12, color=self.TEXT_SECONDARY),
+                    ft.Text(
+                        expires_at,
+                        size=14,
+                        color=self.TEXT_PRIMARY,
+                    ),
+                ],
+                spacing=4,
+            ),
+        ]
+        active_controls = [
+            ft.Row(cast(list[ft.Control], active_header), spacing=10),
+            ft.Row(cast(list[ft.Control], active_stats), spacing=40),
+            ft.ElevatedButton(
+                "重新激活",
+                icon=ft.Icons.REFRESH,
+                on_click=self._on_reactivate_click,
+            ),
+        ]
+
+        return ft.Container(
+            content=ft.Column(
+                cast(list[ft.Control], active_controls),
+                spacing=12,
+                horizontal_alignment=ft.CrossAxisAlignment.START,
+            ),
+            padding=20,
+            border_radius=16,
+            bgcolor=ft.Colors.GREEN_50,
+        )
+
+    def _on_activate_click(self, e: ft.Event[ft.Button]) -> None:
+        if not self.activation_code_input:
+            self._show_snackbar("请先输入激活码")
+            return
+
+        code = (self.activation_code_input.value or "").strip()
+        if not code:
+            self._show_snackbar("请输入激活码")
+            return
+
+        try:
+            result = activate_code(code)
+            message = result.get("message", "激活成功")
+            self._show_snackbar(message)
+            self._add_log(f"激活成功: {message}", "INFO")
+            self._refresh_dashboard()
+        except Exception as exc:
+            self._show_snackbar(f"激活失败: {exc}")
+            self._add_log(f"激活失败: {exc}", "ERROR")
+
+    def _on_reactivate_click(self, e: ft.Event[ft.Button]) -> None:
+        clear_activation()
+        self._show_snackbar("已清除激活状态，请重新激活")
+        self._add_log("已清除激活状态", "WARNING")
+        self._refresh_dashboard()
+
+    def _refresh_dashboard(self) -> None:
+        if not self.content_area or not self.page:
+            return
+
+        self.content_area.controls.clear()
+        self.content_area.controls.append(self._build_dashboard())
+        self.page.update()
+
     def _build_status_card(self) -> ft.Container:
+        running_now = self.engine.is_running()
+        self.is_running = running_now
+
         self.status_dot = ft.Container(
             width=12,
             height=12,
             border_radius=6,
-            bgcolor=ft.Colors.GREY_400,
+            bgcolor=self.SUCCESS_COLOR if running_now else ft.Colors.GREY_400,
         )
         self.status_text = ft.Text(
-            "系统已停止",
+            "系统运行中" if running_now else "系统已停止",
             size=14,
             weight=ft.FontWeight.W_500,
-            color=ft.Colors.GREY_600,
+            color=self.TEXT_PRIMARY if running_now else ft.Colors.GREY_600,
         )
 
         return ft.Container(
@@ -804,6 +1017,20 @@ class FletApp:
                         self.wechat_exec_path_input,
                     ],
                     spacing=8,
+                ),
+                ft.Row(
+                    [
+                        ft.ElevatedButton(
+                            "保存微信路径",
+                            bgcolor=ft.Colors.TEAL_500,
+                            color=ft.Colors.WHITE,
+                            style=ft.ButtonStyle(
+                                shape=ft.RoundedRectangleBorder(radius=8)
+                            ),
+                            on_click=lambda e: self._save_wechat_config(),
+                        )
+                    ],
+                    spacing=12,
                 ),
             ],
         )
@@ -1416,6 +1643,764 @@ class FletApp:
             expand=True,
         )
 
+    def _prepare_followup_controls(self, cfg: dict[str, str]) -> None:
+        if self.followup_enabled_switch:
+            self.followup_enabled_switch.value = (
+                cfg.get("FOLLOWUP_ENABLED") or "0"
+            ) == "1"
+        else:
+            self.followup_enabled_switch = ft.Switch(
+                value=(cfg.get("FOLLOWUP_ENABLED") or "0") == "1"
+            )
+
+        if self.followup_dry_run_switch:
+            self.followup_dry_run_switch.value = (
+                cfg.get("FOLLOWUP_DRY_RUN") or "0"
+            ) == "1"
+        else:
+            self.followup_dry_run_switch = ft.Switch(
+                value=(cfg.get("FOLLOWUP_DRY_RUN") or "0") == "1"
+            )
+
+        def _ensure_textfield(
+            current: ft.TextField | None, value: str, width: int = 120
+        ) -> ft.TextField:
+            if current:
+                current.value = value
+                return current
+            return ft.TextField(
+                value=value,
+                width=width,
+                text_align=ft.TextAlign.CENTER,
+            )
+
+        self.followup_poll_interval_input = _ensure_textfield(
+            self.followup_poll_interval_input,
+            cfg.get("FOLLOWUP_POLL_INTERVAL", "300"),
+        )
+        self.followup_batch_limit_input = _ensure_textfield(
+            self.followup_batch_limit_input,
+            cfg.get("FOLLOWUP_BATCH_LIMIT", "5"),
+        )
+        self.followup_visit_delay_input = _ensure_textfield(
+            self.followup_visit_delay_input,
+            cfg.get("FOLLOWUP_VISIT_DELAY_DAYS", "7"),
+        )
+        self.followup_consume_delay_input = _ensure_textfield(
+            self.followup_consume_delay_input,
+            cfg.get("FOLLOWUP_CONSUME_DELAY_DAYS", "10"),
+        )
+        self.followup_cooldown_input = _ensure_textfield(
+            self.followup_cooldown_input,
+            cfg.get("FOLLOWUP_COOLDOWN_DAYS", "7"),
+        )
+        self.followup_daily_cap_input = _ensure_textfield(
+            self.followup_daily_cap_input,
+            cfg.get("FOLLOWUP_DAILY_CAP", "50"),
+        )
+        self.followup_hourly_cap_input = _ensure_textfield(
+            self.followup_hourly_cap_input,
+            cfg.get("FOLLOWUP_HOURLY_CAP", "10"),
+        )
+        self.followup_quiet_start_input = _ensure_textfield(
+            self.followup_quiet_start_input,
+            cfg.get("FOLLOWUP_QUIET_START_HOUR", "22"),
+        )
+        self.followup_quiet_end_input = _ensure_textfield(
+            self.followup_quiet_end_input,
+            cfg.get("FOLLOWUP_QUIET_END_HOUR", "8"),
+        )
+        self.followup_prompt_version_input = _ensure_textfield(
+            self.followup_prompt_version_input,
+            cfg.get("FOLLOWUP_PROMPT_VERSION", "v1"),
+            140,
+        )
+        self.llm_base_url_input = _ensure_textfield(
+            self.llm_base_url_input,
+            cfg.get("LLM_BASE_URL", ""),
+            360,
+        )
+        llm_api_key_input = _ensure_textfield(
+            self.llm_api_key_input,
+            cfg.get("LLM_API_KEY", ""),
+            280,
+        )
+        llm_api_key_input.password = True
+        llm_api_key_input.can_reveal_password = True
+        self.llm_api_key_input = llm_api_key_input
+        self.llm_model_input = _ensure_textfield(
+            self.llm_model_input,
+            cfg.get("LLM_MODEL", "gpt-4o-mini"),
+            180,
+        )
+        self.llm_timeout_input = _ensure_textfield(
+            self.llm_timeout_input,
+            cfg.get("LLM_TIMEOUT", "30"),
+        )
+        self.llm_max_tokens_input = _ensure_textfield(
+            self.llm_max_tokens_input,
+            cfg.get("LLM_MAX_TOKENS", "180"),
+        )
+        self.llm_retry_count_input = _ensure_textfield(
+            self.llm_retry_count_input,
+            cfg.get("LLM_RETRY_COUNT", "2"),
+        )
+
+    def _build_followup_config_card(self) -> ft.Container:
+        assert self.followup_enabled_switch is not None
+        assert self.followup_dry_run_switch is not None
+        assert self.followup_poll_interval_input is not None
+        assert self.followup_batch_limit_input is not None
+        assert self.followup_visit_delay_input is not None
+        assert self.followup_consume_delay_input is not None
+        assert self.followup_cooldown_input is not None
+        assert self.followup_daily_cap_input is not None
+        assert self.followup_hourly_cap_input is not None
+        assert self.followup_quiet_start_input is not None
+        assert self.followup_quiet_end_input is not None
+        assert self.followup_prompt_version_input is not None
+        assert self.llm_base_url_input is not None
+        assert self.llm_api_key_input is not None
+        assert self.llm_model_input is not None
+        assert self.llm_timeout_input is not None
+        assert self.llm_max_tokens_input is not None
+        assert self.llm_retry_count_input is not None
+
+        return self._build_setting_card(
+            title="自动回访设置",
+            settings=cast(
+                list[ft.Control],
+                [
+                    ft.Row(
+                        [
+                            ft.Text("启用自动回访", size=14, color=self.TEXT_PRIMARY),
+                            self.followup_enabled_switch,
+                            ft.Text("仅生成不发送", size=14, color=self.TEXT_PRIMARY),
+                            self.followup_dry_run_switch,
+                        ],
+                        alignment=ft.MainAxisAlignment.SPACE_BETWEEN,
+                    ),
+                    ft.Row(
+                        [
+                            ft.Text("轮询秒数"),
+                            self.followup_poll_interval_input,
+                            ft.Text("单轮上限"),
+                            self.followup_batch_limit_input,
+                            ft.Text("冷却天数"),
+                            self.followup_cooldown_input,
+                        ],
+                        spacing=10,
+                    ),
+                    ft.Row(
+                        [
+                            ft.Text("到店阈值天"),
+                            self.followup_visit_delay_input,
+                            ft.Text("消费阈值天"),
+                            self.followup_consume_delay_input,
+                            ft.Text("小时上限"),
+                            self.followup_hourly_cap_input,
+                            ft.Text("每日上限"),
+                            self.followup_daily_cap_input,
+                        ],
+                        spacing=10,
+                    ),
+                    ft.Row(
+                        [
+                            ft.Text("静默开始时"),
+                            self.followup_quiet_start_input,
+                            ft.Text("静默结束时"),
+                            self.followup_quiet_end_input,
+                            ft.Text("提示词版本"),
+                            self.followup_prompt_version_input,
+                        ],
+                        spacing=10,
+                    ),
+                    ft.Row(
+                        [ft.Text("LLM Base URL"), self.llm_base_url_input], spacing=10
+                    ),
+                    ft.Row(
+                        [ft.Text("LLM API Key"), self.llm_api_key_input], spacing=10
+                    ),
+                    ft.Row(
+                        [
+                            ft.Text("模型"),
+                            self.llm_model_input,
+                            ft.Text("超时"),
+                            self.llm_timeout_input,
+                            ft.Text("MaxTokens"),
+                            self.llm_max_tokens_input,
+                            ft.Text("重试"),
+                            self.llm_retry_count_input,
+                        ],
+                        spacing=10,
+                    ),
+                    ft.ElevatedButton(
+                        "保存配置",
+                        bgcolor=ft.Colors.TEAL_500,
+                        color=ft.Colors.WHITE,
+                        style=ft.ButtonStyle(shape=ft.RoundedRectangleBorder(radius=8)),
+                        on_click=lambda e: self._save_followup_config(),
+                    ),
+                ],
+            ),
+        )
+
+    def _build_followup_tab(self) -> ft.Container:
+        content = ft.Column(
+            expand=True,
+            scroll=ft.ScrollMode.AUTO,
+            spacing=20,
+        )
+
+        header = ft.Row(
+            [
+                ft.Icon(ft.Icons.FORUM_OUTLINED, size=28, color=self.PRIMARY_COLOR),
+                ft.Text(
+                    "回访中心",
+                    size=24,
+                    weight=ft.FontWeight.BOLD,
+                    color=self.TEXT_PRIMARY,
+                ),
+            ],
+            spacing=12,
+        )
+        content.controls.append(header)
+
+        cfg = get_config()
+        self._prepare_followup_controls(cfg)
+        content.controls.append(self._build_followup_config_card())
+        content.controls.append(self._build_followup_record_lists_card())
+        content.controls.append(self._build_followup_request_card())
+
+        self._refresh_followup_record_groups()
+
+        return ft.Container(
+            content=content,
+            padding=24,
+            expand=True,
+        )
+
+    def _build_followup_record_lists_card(self) -> ft.Container:
+        if self.followup_pending_list_view is None:
+            self.followup_pending_list_view = ft.Column(spacing=8)
+        if self.followup_completed_list_view is None:
+            self.followup_completed_list_view = ft.Column(spacing=8)
+        if self.followup_pending_count_text is None:
+            self.followup_pending_count_text = ft.Text(
+                "待回访 (0)",
+                size=14,
+                weight=ft.FontWeight.W_600,
+                color=self.TEXT_PRIMARY,
+            )
+        if self.followup_completed_count_text is None:
+            self.followup_completed_count_text = ft.Text(
+                "已回访/已发送 (0)",
+                size=14,
+                weight=ft.FontWeight.W_600,
+                color=self.TEXT_PRIMARY,
+            )
+        if self.followup_selected_count_text is None:
+            self.followup_selected_count_text = ft.Text(
+                "已选择 0 人",
+                size=12,
+                color=ft.Colors.GREY_700,
+            )
+
+        pending_box = ft.Container(
+            content=ft.Column(
+                [
+                    self.followup_pending_count_text,
+                    ft.Container(
+                        content=self.followup_pending_list_view,
+                        padding=10,
+                        border_radius=8,
+                        bgcolor=ft.Colors.GREY_50,
+                    ),
+                ],
+                spacing=8,
+            ),
+            padding=12,
+            border_radius=10,
+            bgcolor=ft.Colors.WHITE,
+        )
+
+        completed_box = ft.Container(
+            content=ft.Column(
+                [
+                    self.followup_completed_count_text,
+                    ft.Container(
+                        content=self.followup_completed_list_view,
+                        padding=10,
+                        border_radius=8,
+                        bgcolor=ft.Colors.GREY_50,
+                    ),
+                ],
+                spacing=8,
+            ),
+            padding=12,
+            border_radius=10,
+            bgcolor=ft.Colors.WHITE,
+        )
+
+        return self._build_setting_card(
+            title="回访记录列表",
+            settings=[
+                ft.Row(
+                    [
+                        ft.Text(
+                            "待回访仅按“沉睡预警=需回访”判断；已回访/已发送按回访状态字段展示。",
+                            size=12,
+                            color=ft.Colors.GREY_600,
+                        ),
+                        ft.Container(expand=True),
+                        self.followup_selected_count_text,
+                        ft.TextButton(
+                            "全选待回访",
+                            on_click=lambda e: self._select_all_followup_pending(),
+                        ),
+                        ft.TextButton(
+                            "清空选择",
+                            on_click=lambda e: self._clear_followup_pending_selection(),
+                        ),
+                        ft.ElevatedButton(
+                            "开始自动回访",
+                            bgcolor=ft.Colors.BLUE_600,
+                            color=ft.Colors.WHITE,
+                            style=ft.ButtonStyle(
+                                shape=ft.RoundedRectangleBorder(radius=8)
+                            ),
+                            on_click=lambda e: self._start_followup_auto(),
+                        ),
+                        ft.ElevatedButton(
+                            "手动开始回访",
+                            bgcolor=ft.Colors.TEAL_500,
+                            color=ft.Colors.WHITE,
+                            style=ft.ButtonStyle(
+                                shape=ft.RoundedRectangleBorder(radius=8)
+                            ),
+                            on_click=lambda e: self._start_manual_followup(),
+                        ),
+                        ft.TextButton(
+                            "刷新列表",
+                            on_click=lambda e: self._refresh_followup_record_groups(),
+                        ),
+                    ],
+                    spacing=8,
+                ),
+                pending_box,
+                completed_box,
+            ],
+        )
+
+    def _refresh_followup_record_groups(self) -> None:
+        pending_view = self.followup_pending_list_view
+        completed_view = self.followup_completed_list_view
+        if not self.page or pending_view is None or completed_view is None:
+            return
+
+        pending_view.controls.clear()
+        pending_view.controls.append(
+            ft.Text("加载中...", size=12, color=ft.Colors.GREY_600)
+        )
+        completed_view.controls.clear()
+        completed_view.controls.append(
+            ft.Text("加载中...", size=12, color=ft.Colors.GREY_600)
+        )
+        self.page.update()
+
+        async def _task() -> None:
+            try:
+                pending, completed = await asyncio.to_thread(
+                    self._load_followup_record_groups_sync
+                )
+            except Exception as exc:  # noqa: BLE001
+                msg = str(exc).strip() or "未知错误"
+                if len(msg) > 80:
+                    msg = msg[:80] + "..."
+                pending_view.controls.clear()
+                pending_view.controls.append(
+                    ft.Text(f"加载失败: {msg}", size=12, color=ft.Colors.RED_600)
+                )
+                completed_view.controls.clear()
+                completed_view.controls.append(
+                    ft.Text(f"加载失败: {msg}", size=12, color=ft.Colors.RED_600)
+                )
+                self._add_log(f"回访列表加载失败: {exc}", "ERROR")
+                if self.page:
+                    self.page.update()
+                return
+
+            self._render_followup_record_groups(pending, completed)
+
+        self.page.run_task(_task)
+
+    def _load_followup_record_groups_sync(
+        self,
+    ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
+        cfg = get_config()
+        required_keys = [
+            "FEISHU_APP_ID",
+            "FEISHU_APP_SECRET",
+            "FEISHU_PROFILE_TABLE_URL",
+        ]
+        missing = [key for key in required_keys if not (cfg.get(key) or "").strip()]
+        if missing:
+            missing_labels = [FIELD_LABELS.get(key, key) for key in missing]
+            raise RuntimeError(f"缺少必填配置: {', '.join(missing_labels)}")
+
+        groups = self.engine.get_followup_record_groups()
+        pending = groups.get("pending", [])
+        completed = groups.get("completed", [])
+        pending_list = pending if isinstance(pending, list) else []
+        completed_list = completed if isinstance(completed, list) else []
+        return pending_list, completed_list
+
+    def _update_followup_selected_count_text(self) -> None:
+        if self.followup_selected_count_text:
+            self.followup_selected_count_text.value = (
+                f"已选择 {len(self.followup_selected_record_ids)} 人"
+            )
+
+    def _render_followup_record_groups(
+        self,
+        pending: list[dict[str, Any]],
+        completed: list[dict[str, Any]],
+    ) -> None:
+        if (
+            self.followup_pending_list_view is None
+            or self.followup_completed_list_view is None
+        ):
+            return
+
+        if self.followup_pending_count_text:
+            self.followup_pending_count_text.value = f"待回访 ({len(pending)})"
+        if self.followup_completed_count_text:
+            self.followup_completed_count_text.value = (
+                f"已回访/已发送 ({len(completed)})"
+            )
+
+        self.followup_pending_records_by_id = {
+            str(item.get("record_id") or "").strip(): item
+            for item in pending
+            if str(item.get("record_id") or "").strip()
+        }
+        self.followup_completed_records_cache = list(completed)
+        self.followup_selected_record_ids = {
+            rid
+            for rid in self.followup_selected_record_ids
+            if rid in self.followup_pending_records_by_id
+        }
+        self._update_followup_selected_count_text()
+
+        self.followup_pending_list_view.controls.clear()
+        if not pending:
+            self.followup_pending_list_view.controls.append(
+                ft.Text("暂无待回访记录", size=12, color=ft.Colors.GREY_600)
+            )
+        else:
+            for item in pending:
+                self.followup_pending_list_view.controls.append(
+                    self._build_followup_record_list_row(item, is_pending=True)
+                )
+
+        self.followup_completed_list_view.controls.clear()
+        if not completed:
+            self.followup_completed_list_view.controls.append(
+                ft.Text("暂无已回访/已发送记录", size=12, color=ft.Colors.GREY_600)
+            )
+        else:
+            for item in completed:
+                self.followup_completed_list_view.controls.append(
+                    self._build_followup_record_list_row(item, is_pending=False)
+                )
+
+        if self.page:
+            self.page.update()
+
+    def _build_followup_record_list_row(
+        self, item: dict[str, Any], is_pending: bool
+    ) -> ft.Container:
+        customer = str(item.get("customer") or "").strip() or "未知客户"
+        wechat_id = str(item.get("wechat_id") or "").strip() or "-"
+        phone = str(item.get("phone") or "").strip() or "-"
+        raw_record_id = str(item.get("record_id") or "").strip()
+        record_id = raw_record_id or "-"
+        sleep_warning = str(item.get("sleep_warning") or "").strip() or "-"
+        followup_status = str(item.get("followup_status") or "").strip() or "-"
+        sent_time = str(item.get("followup_last_sent_text") or "").strip() or "-"
+        message = str(item.get("followup_message") or "").strip()
+        message_preview = ""
+        if message:
+            message_preview = message[:80] + ("..." if len(message) > 80 else "")
+
+        status_text = (
+            f"沉睡预警: {sleep_warning}"
+            if is_pending
+            else f"回访状态: {followup_status}"
+        )
+
+        selection_checkbox: ft.Control = ft.Container(width=1)
+        if is_pending:
+            if raw_record_id and phone != "-":
+                selection_checkbox = ft.Checkbox(
+                    value=raw_record_id in self.followup_selected_record_ids,
+                    data=raw_record_id,
+                    on_change=self._on_followup_pending_selection_change,
+                )
+            else:
+                selection_checkbox = ft.Text(
+                    "不可回访", size=11, color=ft.Colors.GREY_500
+                )
+
+        controls: list[ft.Control] = [
+            ft.Row(
+                [
+                    ft.Text(
+                        f"客户: {customer}",
+                        size=13,
+                        weight=ft.FontWeight.W_600,
+                        color=self.TEXT_PRIMARY,
+                    ),
+                    selection_checkbox,
+                    ft.Container(expand=True),
+                    ft.Text(status_text, size=11, color=ft.Colors.GREY_700),
+                    ft.Text(
+                        f"回访时间: {sent_time}", size=11, color=ft.Colors.GREY_600
+                    ),
+                ],
+                spacing=8,
+            ),
+            ft.Text(
+                f"微信号: {wechat_id} | 手机号: {phone} | 记录ID: {record_id}",
+                size=11,
+                color=ft.Colors.GREY_600,
+            ),
+        ]
+
+        if message_preview:
+            controls.append(
+                ft.Text(
+                    f"回访文案: {message_preview}",
+                    size=11,
+                    color=ft.Colors.GREY_700,
+                )
+            )
+
+        return ft.Container(
+            content=ft.Column(controls, spacing=6),
+            padding=10,
+            border_radius=8,
+            bgcolor=ft.Colors.WHITE,
+        )
+
+    def _on_followup_pending_selection_change(
+        self, event: ft.Event[ft.Checkbox]
+    ) -> None:
+        checkbox = event.control
+        record_id = str(checkbox.data or "").strip()
+        if not record_id:
+            return
+
+        if bool(checkbox.value):
+            self.followup_selected_record_ids.add(record_id)
+        else:
+            self.followup_selected_record_ids.discard(record_id)
+
+        self._update_followup_selected_count_text()
+        if self.page:
+            self.page.update()
+
+    def _select_all_followup_pending(self) -> None:
+        self.followup_selected_record_ids = set(
+            self.followup_pending_records_by_id.keys()
+        )
+        self._update_followup_selected_count_text()
+        self._render_followup_record_groups(
+            list(self.followup_pending_records_by_id.values()),
+            self.followup_completed_records_cache,
+        )
+
+    def _clear_followup_pending_selection(self) -> None:
+        self.followup_selected_record_ids.clear()
+        self._update_followup_selected_count_text()
+        self._render_followup_record_groups(
+            list(self.followup_pending_records_by_id.values()),
+            self.followup_completed_records_cache,
+        )
+
+    def _start_manual_followup(self) -> None:
+        if not self.page:
+            return
+
+        selected_ids = sorted(self.followup_selected_record_ids)
+        if not selected_ids:
+            self._show_snackbar("请先选择需要回访的用户")
+            return
+
+        self._show_snackbar(f"开始手动回访，目标 {len(selected_ids)} 人")
+
+        async def _task() -> None:
+            try:
+                result = await asyncio.to_thread(
+                    self.engine.run_manual_followup,
+                    selected_ids,
+                )
+                self._show_snackbar(result.get("message") or "手动回访完成")
+                self._add_log(result.get("message") or "手动回访完成", "INFO")
+                self._refresh_followup_request_list_view()
+                self._refresh_followup_record_groups()
+            except Exception as exc:  # noqa: BLE001
+                self._show_snackbar(f"手动回访失败: {exc}")
+                self._add_log(f"手动回访失败: {exc}", "ERROR")
+
+        self.page.run_task(_task)
+
+    def _start_followup_auto(self) -> None:
+        success, message = self.engine.start_followup_auto()
+        self._show_snackbar(message)
+        self._add_log(message, "INFO" if success else "WARNING")
+
+    def _build_followup_request_card(self) -> ft.Container:
+        if self.followup_request_list_view is None:
+            self.followup_request_list_view = ft.Column(spacing=10)
+        self._refresh_followup_request_list_view(force=True)
+
+        return self._build_setting_card(
+            title="回访请求列表",
+            settings=[
+                ft.Row(
+                    [
+                        ft.Text(
+                            "按客户展示回访API请求及请求状态，列表自动刷新。",
+                            size=12,
+                            color=ft.Colors.GREY_600,
+                        ),
+                        ft.Container(expand=True),
+                    ],
+                    spacing=8,
+                ),
+                ft.Container(
+                    content=self.followup_request_list_view,
+                    padding=12,
+                    border_radius=10,
+                    bgcolor=ft.Colors.GREY_50,
+                ),
+            ],
+        )
+
+    def _refresh_followup_request_list_view(
+        self, force: bool = False, update_page: bool = True
+    ) -> bool:
+        if self.followup_request_list_view is None:
+            return False
+
+        items = self.engine.get_followup_request_items()
+        signature = "|".join(
+            f"{item.get('record_id', '')}:{item.get('status', '')}:{item.get('updated_at', '')}:{item.get('prompt', '')}"
+            for item in items
+        )
+        if not force and signature == self.followup_request_signature:
+            return False
+
+        self.followup_request_signature = signature
+
+        self.followup_request_list_view.controls.clear()
+        if not items:
+            self.followup_request_list_view.controls.append(
+                ft.Text("暂无回访API请求记录", size=12, color=ft.Colors.GREY_600)
+            )
+        else:
+            for item in items:
+                self.followup_request_list_view.controls.append(
+                    self._build_followup_request_row(item)
+                )
+
+        if update_page and self.page:
+            self.page.update()
+        return True
+
+    def _build_followup_request_row(self, item: dict[str, str]) -> ft.Container:
+        record_id = (item.get("record_id") or "").strip()
+        customer = (item.get("customer") or "未知客户").strip() or "未知客户"
+        wechat_id = (item.get("wechat_id") or "").strip()
+        status = (item.get("status") or "").strip()
+        updated_at = (item.get("updated_at") or "").strip()
+        prompt = item.get("prompt") or ""
+
+        status_color = ft.Colors.BLUE_700
+        status_bg = ft.Colors.BLUE_50
+        if status == "已请求":
+            status_color = ft.Colors.GREEN_700
+            status_bg = ft.Colors.GREEN_50
+        elif status == "模板降级":
+            status_color = ft.Colors.AMBER_800
+            status_bg = ft.Colors.AMBER_50
+        elif status == "待请求":
+            status_color = ft.Colors.BLUE_700
+            status_bg = ft.Colors.BLUE_50
+
+        prompt_view = ft.Container(
+            content=ft.Text(
+                prompt or "-",
+                size=12,
+                selectable=True,
+                color=self.TEXT_PRIMARY,
+            ),
+            padding=10,
+            border_radius=8,
+            bgcolor=ft.Colors.GREY_50,
+        )
+
+        return ft.Container(
+            content=ft.Column(
+                [
+                    ft.Row(
+                        [
+                            ft.Text(
+                                f"客户: {customer}",
+                                size=13,
+                                weight=ft.FontWeight.W_600,
+                                color=self.TEXT_PRIMARY,
+                            ),
+                            ft.Container(expand=True),
+                            ft.Text(
+                                "请求状态",
+                                size=11,
+                                color=ft.Colors.GREY_600,
+                            ),
+                            ft.Container(
+                                content=ft.Text(
+                                    status or "-",
+                                    size=11,
+                                    weight=ft.FontWeight.W_600,
+                                    color=status_color,
+                                ),
+                                padding=ft.padding.symmetric(horizontal=8, vertical=4),
+                                border_radius=999,
+                                bgcolor=status_bg,
+                            ),
+                            ft.Text(
+                                f"更新时间: {updated_at or '-'}",
+                                size=11,
+                                color=ft.Colors.GREY_600,
+                            ),
+                        ],
+                        spacing=10,
+                    ),
+                    ft.Text(
+                        f"微信号: {wechat_id or '-'} | 记录ID: {record_id or '-'}",
+                        size=11,
+                        color=ft.Colors.GREY_600,
+                    ),
+                    prompt_view,
+                ],
+                spacing=8,
+            ),
+            padding=10,
+            border_radius=8,
+            bgcolor=ft.Colors.WHITE,
+        )
+
     def _build_setting_card(
         self, title: str, settings: list[ft.Control]
     ) -> ft.Container:
@@ -1728,6 +2713,7 @@ class FletApp:
             bool(self.welcome_switch.value) if self.welcome_switch else False
         )
         steps = list(self.welcome_steps_data)
+        current_cfg = get_config()
 
         values = {
             "FEISHU_APP_ID": (
@@ -1830,6 +2816,90 @@ class FletApp:
             "BUTTON_FIND_TIMEOUT": (
                 self.button_timeout_input.value if self.button_timeout_input else "3.0"
             ).strip(),
+            "FOLLOWUP_ENABLED": (
+                "1"
+                if self.followup_enabled_switch and self.followup_enabled_switch.value
+                else (current_cfg.get("FOLLOWUP_ENABLED") or "0")
+            ),
+            "FOLLOWUP_DRY_RUN": (
+                "1"
+                if self.followup_dry_run_switch and self.followup_dry_run_switch.value
+                else (current_cfg.get("FOLLOWUP_DRY_RUN") or "0")
+            ),
+            "FOLLOWUP_POLL_INTERVAL": (
+                self.followup_poll_interval_input.value
+                if self.followup_poll_interval_input
+                else current_cfg.get("FOLLOWUP_POLL_INTERVAL", "300")
+            ).strip(),
+            "FOLLOWUP_BATCH_LIMIT": (
+                self.followup_batch_limit_input.value
+                if self.followup_batch_limit_input
+                else current_cfg.get("FOLLOWUP_BATCH_LIMIT", "5")
+            ).strip(),
+            "FOLLOWUP_VISIT_DELAY_DAYS": (
+                self.followup_visit_delay_input.value
+                if self.followup_visit_delay_input
+                else current_cfg.get("FOLLOWUP_VISIT_DELAY_DAYS", "7")
+            ).strip(),
+            "FOLLOWUP_CONSUME_DELAY_DAYS": (
+                self.followup_consume_delay_input.value
+                if self.followup_consume_delay_input
+                else current_cfg.get("FOLLOWUP_CONSUME_DELAY_DAYS", "10")
+            ).strip(),
+            "FOLLOWUP_COOLDOWN_DAYS": (
+                self.followup_cooldown_input.value
+                if self.followup_cooldown_input
+                else current_cfg.get("FOLLOWUP_COOLDOWN_DAYS", "7")
+            ).strip(),
+            "FOLLOWUP_DAILY_CAP": (
+                self.followup_daily_cap_input.value
+                if self.followup_daily_cap_input
+                else current_cfg.get("FOLLOWUP_DAILY_CAP", "50")
+            ).strip(),
+            "FOLLOWUP_HOURLY_CAP": (
+                self.followup_hourly_cap_input.value
+                if self.followup_hourly_cap_input
+                else current_cfg.get("FOLLOWUP_HOURLY_CAP", "10")
+            ).strip(),
+            "FOLLOWUP_QUIET_START_HOUR": (
+                self.followup_quiet_start_input.value
+                if self.followup_quiet_start_input
+                else current_cfg.get("FOLLOWUP_QUIET_START_HOUR", "22")
+            ).strip(),
+            "FOLLOWUP_QUIET_END_HOUR": (
+                self.followup_quiet_end_input.value
+                if self.followup_quiet_end_input
+                else current_cfg.get("FOLLOWUP_QUIET_END_HOUR", "8")
+            ).strip(),
+            "FOLLOWUP_PROMPT_VERSION": (
+                self.followup_prompt_version_input.value
+                if self.followup_prompt_version_input
+                else current_cfg.get("FOLLOWUP_PROMPT_VERSION", "v1")
+            ).strip(),
+            "LLM_BASE_URL": (
+                self.llm_base_url_input.value if self.llm_base_url_input else ""
+            ).strip()
+            or (current_cfg.get("LLM_BASE_URL") or "").strip(),
+            "LLM_API_KEY": (
+                self.llm_api_key_input.value if self.llm_api_key_input else ""
+            ).strip()
+            or (current_cfg.get("LLM_API_KEY") or "").strip(),
+            "LLM_MODEL": (
+                self.llm_model_input.value if self.llm_model_input else "gpt-4o-mini"
+            ).strip()
+            or (current_cfg.get("LLM_MODEL") or "gpt-4o-mini").strip(),
+            "LLM_TIMEOUT": (
+                self.llm_timeout_input.value if self.llm_timeout_input else "30"
+            ).strip()
+            or (current_cfg.get("LLM_TIMEOUT") or "30").strip(),
+            "LLM_MAX_TOKENS": (
+                self.llm_max_tokens_input.value if self.llm_max_tokens_input else "180"
+            ).strip()
+            or (current_cfg.get("LLM_MAX_TOKENS") or "180").strip(),
+            "LLM_RETRY_COUNT": (
+                self.llm_retry_count_input.value if self.llm_retry_count_input else "2"
+            ).strip()
+            or (current_cfg.get("LLM_RETRY_COUNT") or "2").strip(),
         }
         return values, steps
 
@@ -1870,6 +2940,12 @@ class FletApp:
 
         # 应用告警配置
         self.engine.alert_cooldown = int(cfg.get("ALERT_COOLDOWN") or 60)
+
+        # 应用自动回访配置
+        from src.services.followup import LLMClient, load_followup_runtime_config
+
+        self.engine.followup_cfg = load_followup_runtime_config(cfg)
+        self.engine.llm_client = LLMClient(self.engine.followup_cfg)
 
         # 应用飞书轮询间隔
         self.engine.feishu_poll_interval = max(
@@ -1944,6 +3020,16 @@ class FletApp:
         self._apply_config_to_engine(cfg, [])
         self._show_snackbar("飞书配置已保存")
 
+    def _save_wechat_config(self) -> None:
+        value = (
+            self.wechat_exec_path_input.value if self.wechat_exec_path_input else ""
+        ).strip()
+        cfg = update_config({"WECHAT_EXEC_PATH": value}, persist=True)
+        self.engine.cfg = cfg
+        if self.engine.wechat:
+            self.engine.wechat.exec_path = value
+        self._show_snackbar("微信路径已保存")
+
     def _save_alert_config(self) -> None:
         """只保存日志与告警相关配置"""
         values = {
@@ -1996,6 +3082,94 @@ class FletApp:
         network_config.reload()
         self._apply_config_to_engine(cfg, steps)
         self._show_snackbar("欢迎包配置已保存")
+
+    def _save_followup_config(self) -> None:
+        """只保存自动回访相关配置"""
+        values = {
+            "FOLLOWUP_ENABLED": (
+                "1"
+                if self.followup_enabled_switch and self.followup_enabled_switch.value
+                else "0"
+            ),
+            "FOLLOWUP_DRY_RUN": (
+                "1"
+                if self.followup_dry_run_switch and self.followup_dry_run_switch.value
+                else "0"
+            ),
+            "FOLLOWUP_POLL_INTERVAL": (
+                self.followup_poll_interval_input.value
+                if self.followup_poll_interval_input
+                else "300"
+            ).strip(),
+            "FOLLOWUP_BATCH_LIMIT": (
+                self.followup_batch_limit_input.value
+                if self.followup_batch_limit_input
+                else "5"
+            ).strip(),
+            "FOLLOWUP_VISIT_DELAY_DAYS": (
+                self.followup_visit_delay_input.value
+                if self.followup_visit_delay_input
+                else "7"
+            ).strip(),
+            "FOLLOWUP_CONSUME_DELAY_DAYS": (
+                self.followup_consume_delay_input.value
+                if self.followup_consume_delay_input
+                else "10"
+            ).strip(),
+            "FOLLOWUP_COOLDOWN_DAYS": (
+                self.followup_cooldown_input.value
+                if self.followup_cooldown_input
+                else "7"
+            ).strip(),
+            "FOLLOWUP_DAILY_CAP": (
+                self.followup_daily_cap_input.value
+                if self.followup_daily_cap_input
+                else "50"
+            ).strip(),
+            "FOLLOWUP_HOURLY_CAP": (
+                self.followup_hourly_cap_input.value
+                if self.followup_hourly_cap_input
+                else "10"
+            ).strip(),
+            "FOLLOWUP_QUIET_START_HOUR": (
+                self.followup_quiet_start_input.value
+                if self.followup_quiet_start_input
+                else "22"
+            ).strip(),
+            "FOLLOWUP_QUIET_END_HOUR": (
+                self.followup_quiet_end_input.value
+                if self.followup_quiet_end_input
+                else "8"
+            ).strip(),
+            "FOLLOWUP_PROMPT_VERSION": (
+                self.followup_prompt_version_input.value
+                if self.followup_prompt_version_input
+                else "v1"
+            ).strip(),
+            "LLM_BASE_URL": (
+                self.llm_base_url_input.value if self.llm_base_url_input else ""
+            ).strip(),
+            "LLM_API_KEY": (
+                self.llm_api_key_input.value if self.llm_api_key_input else ""
+            ).strip(),
+            "LLM_MODEL": (
+                self.llm_model_input.value if self.llm_model_input else "gpt-4o-mini"
+            ).strip(),
+            "LLM_TIMEOUT": (
+                self.llm_timeout_input.value if self.llm_timeout_input else "30"
+            ).strip(),
+            "LLM_MAX_TOKENS": (
+                self.llm_max_tokens_input.value if self.llm_max_tokens_input else "180"
+            ).strip(),
+            "LLM_RETRY_COUNT": (
+                self.llm_retry_count_input.value if self.llm_retry_count_input else "2"
+            ).strip(),
+        }
+
+        cfg = update_config(values, persist=True)
+        steps = list(self.welcome_steps_data)
+        self._apply_config_to_engine(cfg, steps)
+        self._show_snackbar("自动回访配置已保存")
 
     def _check_feishu_connection(self) -> None:
         if not self.page:
@@ -2090,13 +3264,14 @@ class FletApp:
         )
         content.controls.append(header)
 
-        self.log_list = ft.ListView(
+        log_list = ft.ListView(
             expand=True,
             spacing=4,
             auto_scroll=True,
         )
+        self.log_list = log_list
 
-        self.log_empty_state = ft.Container(
+        log_empty_state = ft.Container(
             content=ft.Column(
                 [
                     ft.Icon(ft.Icons.INBOX_OUTLINED, size=48, color=ft.Colors.GREY_300),
@@ -2112,18 +3287,19 @@ class FletApp:
             expand=True,
             visible=True,
         )
+        self.log_empty_state = log_empty_state
 
         if self.log_history:
-            self.log_list.controls.extend(
+            log_list.controls.extend(
                 self._parse_log_line(line) for line in self.log_history
             )
-            self.log_empty_state.visible = False
+            log_empty_state.visible = False
 
         scroll_container = ft.Container(
             content=ft.Stack(
                 [
-                    self.log_list,
-                    self.log_empty_state,
+                    log_list,
+                    log_empty_state,
                 ],
                 expand=True,
                 fit=ft.StackFit.EXPAND,
@@ -2156,24 +3332,59 @@ class FletApp:
         elif index == 2:
             self.content_area.controls.append(self._build_operation_settings())
         elif index == 3:
+            self.content_area.controls.append(self._build_followup_tab())
+        elif index == 4:
             self.content_area.controls.append(self._build_logs())
 
         self.page.update()
 
-    def _update_status(self, running: bool, message: str = "") -> None:
+    def _is_followup_tab_active(self) -> bool:
+        if self.nav_rail is None:
+            return False
+        return (self.nav_rail.selected_index or 0) == 3
+
+    def _sync_running_status(self, update_page: bool = False) -> None:
+        running_now = self.engine.is_running()
+        self.is_running = running_now
+        self._update_status(
+            running_now,
+            "系统运行中" if running_now else "系统已停止",
+            update_page=update_page,
+        )
+
+    def _update_status(
+        self, running: bool, message: str = "", update_page: bool = True
+    ) -> None:
         if self.status_dot and self.status_text:
+            target_dot = self.SUCCESS_COLOR if running else ft.Colors.GREY_400
+            target_text = message or ("系统运行中" if running else "系统已停止")
+            target_color = self.TEXT_PRIMARY if running else ft.Colors.GREY_600
+            is_changed = (
+                self.status_dot.bgcolor != target_dot
+                or self.status_text.value != target_text
+                or self.status_text.color != target_color
+            )
+
             if running:
-                self.status_dot.bgcolor = self.SUCCESS_COLOR
-                self.status_text.value = message or "系统运行中"
-                self.status_text.color = self.TEXT_PRIMARY
+                self.status_dot.bgcolor = target_dot
+                self.status_text.value = target_text
+                self.status_text.color = target_color
             else:
-                self.status_dot.bgcolor = ft.Colors.GREY_400
-                self.status_text.value = message or "系统已停止"
-                self.status_text.color = ft.Colors.GREY_600
-            if self.page:
+                self.status_dot.bgcolor = target_dot
+                self.status_text.value = target_text
+                self.status_text.color = target_color
+            if is_changed and update_page and self.page:
                 self.page.update()
 
     def _update_stats_display(self) -> None:
+        self._sync_running_status(update_page=False)
+
+        if (
+            self._is_followup_tab_active()
+            and self.followup_request_list_view is not None
+        ):
+            self._refresh_followup_request_list_view(force=False, update_page=False)
+
         if self.apply_count:
             self.apply_count.value = str(self.engine.apply_count)
         if self.welcome_count:
@@ -2321,9 +3532,23 @@ class FletApp:
         self._show_snackbar(f"日志已导出: {export_path}")
 
     def _start_engine(self) -> None:
-        if not self.is_running:
+        if not self.engine.is_running():
             try:
                 cfg = get_config()
+                activation_code = (cfg.get("ACTIVATION_CODE") or "").strip()
+                try:
+                    is_valid, message, info = validate_activation_code(activation_code)
+                except Exception as exc:
+                    self._show_snackbar(f"激活验证失败: {exc}")
+                    self._add_log(f"激活验证失败: {exc}", "ERROR")
+                    return
+
+                if not is_valid or info.get("status") not in ("已激活", "已绑定"):
+                    reason = message if not is_valid else "激活码未激活，请先激活"
+                    self._show_snackbar(reason)
+                    self._add_log(f"激活验证失败: {reason}", "ERROR")
+                    return
+
                 missing = validate_required_config(cfg)
                 if missing:
                     missing_labels = [FIELD_LABELS.get(key, key) for key in missing]
@@ -2331,7 +3556,7 @@ class FletApp:
                     self._add_log(f"缺少必填配置: {', '.join(missing_labels)}", "ERROR")
                     return
                 self.engine.start()
-                self.is_running = True
+                self.is_running = self.engine.is_running()
                 self._update_status(True, "系统运行中")
                 self._clear_quick_error()
                 self._add_log("系统已启动", "INFO")
@@ -2350,9 +3575,9 @@ class FletApp:
                 self._add_log("监控已暂停", "WARNING")
 
     def _stop_engine(self) -> None:
-        if self.is_running:
+        if self.engine.is_running():
             self.engine.stop()
-            self.is_running = False
+            self.is_running = self.engine.is_running()
             self._update_status(False, "系统已停止")
             self._add_log("系统已停止", "INFO")
 
